@@ -40,6 +40,7 @@ type
     procedure IniPersistStripsRemote;
     procedure OpenDialogPathLocalAndRemote;
     procedure EffectiveChannelsAndExportDropRemote;
+    procedure RejectedValueHasVisibleReason;
   end;
 
 implementation
@@ -418,6 +419,36 @@ begin
     S := CompilePowerShell(F, nil);
     AssertTrue('no UNC in export', Pos('host\share', S) = 0);
     AssertTrue('no slash-UNC in export', Pos('host/share', S) = 0);
+  finally
+    F.Free;
+  end;
+end;
+procedure TValidationTests.RejectedValueHasVisibleReason;
+var
+  F: TSiftFilter;
+  Msg: string;
+begin
+  { ApplyCell / AddTerm raise a message the UI shows in MessageDlg. }
+  F := TSiftFilter.Create;
+  try
+    Msg := '';
+    try
+      F.ApplyCell(sfProvider, 'x''" or 1=1 or @Name="', saInclude, amAdd);
+    except
+      on E: EConvertError do
+        Msg := E.Message;
+    end;
+    AssertTrue('prefix', Pos('Invalid Provider value: ', Msg) = 1);
+    AssertTrue('reason is visible', Pos('contains both single and double quotes', Msg) > 0);
+    AssertTrue('payload is not echoed', Pos('or 1=1', Msg) = 0);
+    Msg := '';
+    try
+      F.AddTerm(MakeTerm(sfUser, saInclude, 'S-x'));
+    except
+      on E: EConvertError do
+        Msg := E.Message;
+    end;
+    AssertTrue('SID reason', Pos('not a valid SID', Msg) > 0);
   finally
     F.Free;
   end;

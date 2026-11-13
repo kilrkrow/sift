@@ -568,12 +568,24 @@ end;
 
 function TSiftFilter.AddTerm(const T: TSiftTerm): Integer;
 var
-  N: string;
+  N, Why: string;
   X: TSiftTerm;
 begin
   if not NormalizeTermValue(T.Field, T.Value, N) then
+  begin
+    Why := UnsafeValueReason(T.Value);
+    if Why = '' then
+    begin
+      if T.Field = sfUser then
+        Why := 'not a valid SID (S-1- followed by at least one RID group)'
+      else if T.Field = sfChannel then
+        Why := 'remote or UNC file paths are not allowed'
+      else
+        Why := T.Value;
+    end;
     raise EConvertError.CreateFmt('Invalid %s value: %s',
-      [SiftFieldCaptions[T.Field], T.Value]);
+      [SiftFieldCaptions[T.Field], Why]);
+  end;
   X := T;
   X.Value := N;
   Result := IndexOfTerm(X);
