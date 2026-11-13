@@ -54,8 +54,8 @@ function NotificationAreaAvailable: Boolean;
 { Re-launches this exe through the "runas" verb (the user sees UAC). }
 function RestartElevated(const Params: string; out Err: string): Boolean;
 
-function FileVersionString: string;  { e.g. '0.1.0' (from VERSIONINFO) }
-function FileVersionFull: string;    { e.g. '0.1.0.0' }
+function FileVersionString: string;  { e.g. '0.1.1' (from VERSIONINFO) }
+function FileVersionFull: string;    { e.g. '0.1.1.0' }
 function VersionInfoValue(const Key: string): string;
 
 implementation
@@ -296,18 +296,75 @@ type
   end;
   PLangCp = ^TLangCp;
 
+  TGetFileVersionInfoSizeW = function(lptstrFilename: PWideChar;
+    var lpdwHandle: DWORD): DWORD; stdcall;
+  TGetFileVersionInfoW = function(lptstrFilename: PWideChar;
+    dwHandle, dwLen: DWORD; lpData: Pointer): WINBOOL; stdcall;
+  TVerQueryValueW = function(pBlock: Pointer; lpSubBlock: PWideChar;
+    var lplpBuffer: Pointer; var puLen: UINT): WINBOOL; stdcall;
+
+var
+  VersionLib: HMODULE = 0;
+  pGetFileVersionInfoSizeW: TGetFileVersionInfoSizeW = nil;
+  pGetFileVersionInfoW: TGetFileVersionInfoW = nil;
+  pVerQueryValueW: TVerQueryValueW = nil;
+
+function System32Dll(const Dll: UnicodeString): UnicodeString;
+var
+  Dir: array[0..MAX_PATH] of WideChar;
+  N: UINT;
+begin
+  Result := '';
+  N := GetSystemDirectoryW(@Dir[0], MAX_PATH);
+  if (N = 0) or (N >= MAX_PATH) then
+    Exit;
+  Result := UnicodeString(PWideChar(@Dir[0]));
+  if (Length(Result) > 0) and (Result[Length(Result)] <> '\') then
+    Result := Result + '\';
+  Result := Result + Dll;
+end;
+
+function LoadVersionApis: Boolean;
+var
+  Path: UnicodeString;
+begin
+  if Assigned(pGetFileVersionInfoSizeW) and Assigned(pGetFileVersionInfoW)
+    and Assigned(pVerQueryValueW) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+  Path := System32Dll('version.dll');
+  if Path = '' then
+    Exit;
+  VersionLib := LoadLibraryW(PWideChar(Path));
+  if VersionLib = 0 then
+    Exit;
+  pGetFileVersionInfoSizeW := TGetFileVersionInfoSizeW(
+    GetProcAddress(VersionLib, 'GetFileVersionInfoSizeW'));
+  pGetFileVersionInfoW := TGetFileVersionInfoW(
+    GetProcAddress(VersionLib, 'GetFileVersionInfoW'));
+  pVerQueryValueW := TVerQueryValueW(
+    GetProcAddress(VersionLib, 'VerQueryValueW'));
+  Result := Assigned(pGetFileVersionInfoSizeW) and Assigned(pGetFileVersionInfoW)
+    and Assigned(pVerQueryValueW);
+end;
+
 function ReadVersionBlock(out Buf: TBytes): Boolean;
 var
   Dummy, Size: DWORD;
   W: UnicodeString;
 begin
   Result := False;
+  if not LoadVersionApis then
+    Exit;
   W := UnicodeString(ExePath);
-  Size := GetFileVersionInfoSizeW(PWideChar(W), Dummy);
+  Size := pGetFileVersionInfoSizeW(PWideChar(W), Dummy);
   if Size = 0 then
     Exit;
   SetLength(Buf, Size);
-  Result := GetFileVersionInfoW(PWideChar(W), 0, Size, @Buf[0]);
+  Result := pGetFileVersionInfoW(PWideChar(W), 0, Size, @Buf[0]);
 end;
 
 function VersionInfoValue(const Key: string): string;
@@ -321,11 +378,11 @@ begin
   Result := '';
   if not ReadVersionBlock(Buf) then
     Exit;
-  if not VerQueryValueW(@Buf[0], '\VarFileInfo\Translation', P, Len) or (Len < 4) then
+  if not pVerQueryValueW(@Buf[0], '\VarFileInfo\Translation', P, Len) or (Len < 4) then
     Exit;
   LC := PLangCp(P);
   Sub := UnicodeString(Format('\StringFileInfo\%.4x%.4x\%s', [LC^.Lang, LC^.Cp, Key]));
-  if VerQueryValueW(@Buf[0], PWideChar(Sub), P, Len) and (Len > 0) then
+  if pVerQueryValueW(@Buf[0], PWideChar(Sub), P, Len) and (Len > 0) then
     Result := UTF8Encode(UnicodeString(PWideChar(P)));
 end;
 
@@ -340,7 +397,7 @@ begin
   A := 0; B := 0; C := 0; D := 0;
   if not ReadVersionBlock(Buf) then
     Exit;
-  if VerQueryValueW(@Buf[0], '\', P, Len) and (Len >= SizeOf(TVSFixedFileInfo)) then
+  if pVerQueryValueW(@Buf[0], '\', P, Len) and (Len >= SizeOf(TVSFixedFileInfo)) then
   begin
     FI := PVSFixedFileInfo(P);
     A := HiWord(FI^.dwFileVersionMS);
@@ -350,6 +407,7 @@ begin
     Result := True;
   end;
 end;
+
 
 function FileVersionString: string;
 var

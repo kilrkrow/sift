@@ -51,7 +51,7 @@ function SetWindowPreset(F: TSiftFilter; P: TSiftWindowPreset;
   StartUtc: TDateTime = 0; EndUtc: TDateTime = 0): Boolean;
 
 { Max count from the edit box text: '' or 0 = no cap; anything that is not
-  a whole number from 0 to 1000000 is rejected (False, F unchanged). }
+  a whole number from 0 to MaxLastN is rejected (False, F unchanged). }
 function SetMaxCountText(F: TSiftFilter; const S: string): Boolean;
 
 { '*' for every readable log, a channel name when exactly one log is
@@ -188,7 +188,7 @@ begin
     for C in T do
       if not (C in ['0'..'9']) then
         Exit(False);
-    if (Length(T) > 7) or not TryStrToInt(T, N) or (N > 1000000) then
+    if (Length(T) > 7) or not TryStrToInt(T, N) or (N > MaxLastN) then
       Exit(False);
   end;
   F.SetMaxCount(N);

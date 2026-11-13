@@ -3,7 +3,7 @@ unit Sift.Compiler;
 { Compiles a TSiftFilter to what the event log service runs:
   - a structured XML query (<QueryList>), Include -> Select, Exclude -> Suppress
   - the equivalent Get-WinEvent -FilterHashtable one-liner when one exists
-  - a PowerShell 5.1 export (Get-WinEvent -FilterXml), one command per line
+  - a PowerShell 5.1 export (Get-WinEvent -FilterXml); the query XML is a Base64 blob, not a here-string
   Event Log XPath is a subset of XPath 1.0: no contains()/starts-with(), and
   at most 20 sub-expressions per expression, so large OR groups are split
   across several Select elements (Selects in one Query are a union). }
@@ -32,6 +32,8 @@ type
 
 function CompileFilter(F: TSiftFilter; AllChannels: TStrings): TSiftCompiled;
 function CompilePowerShell(F: TSiftFilter; AllChannels: TStrings): string;
+{ One assignment: $Name = UTF8.GetString(FromBase64String(...)). No here-string. }
+function PsAssignQuery(const VarName, QueryXml: string): string;
 
 { Helpers, exposed for tests }
 function XmlEscape(const S: string): string;
@@ -44,6 +46,9 @@ function KeywordDecimal(const Hex: string): string;
 function RecordQueryXml(const Channel: string; RecordId: Int64): string;
 
 implementation
+
+uses
+  base64;
 
 type
   TGroup = record
@@ -538,6 +543,17 @@ begin
   BuildFilterHashtable(F, Result);
 end;
 
+function PsAssignQuery(const VarName, QueryXml: string): string;
+var
+  B64: string;
+begin
+  B64 := EncodeStringBase64(QueryXml);
+  B64 := StringReplace(B64, #13, '', [rfReplaceAll]);
+  B64 := StringReplace(B64, #10, '', [rfReplaceAll]);
+  Result := VarName + ' = [System.Text.Encoding]::UTF8.GetString(' +
+    '[System.Convert]::FromBase64String(''' + B64 + '''))';
+end;
+
 function CompilePowerShell(F: TSiftFilter; AllChannels: TStrings): string;
 var
   C, SubC: TSiftCompiled;
@@ -581,9 +597,7 @@ begin
     L.Add('$siftErrors = @()');
     if not PerPath then
     begin
-      L.Add('$siftQuery = @''');
-      L.Add(C.QueryXml);
-      L.Add('''@');
+      L.Add(PsAssignQuery('$siftQuery', C.QueryXml));
       Cmd := GetCmd('$siftQuery', (C.LastN > 0) and not C.ClientText);
       if Length(C.Channels) > 1 then
       begin
@@ -664,9 +678,7 @@ begin
         finally
           Sub.Free;
         end;
-        L.Add('$siftQuery' + IntToStr(K) + ' = @''');
-        L.Add(SubC.QueryXml);
-        L.Add('''@');
+        L.Add(PsAssignQuery('$siftQuery' + IntToStr(K), SubC.QueryXml));
         L.Add('$siftPart = ' + GetCmd('$siftQuery' + IntToStr(K), not C.ClientText));
         if C.ClientText then
         begin

@@ -24,9 +24,9 @@
       <UseVersionInfo Value="True"/>
       <MajorVersionNr Value="0"/>
       <MinorVersionNr Value="1"/>
-      <RevisionNr Value="0"/>
+      <RevisionNr Value="1"/>
       <BuildNr Value="0"/>
-      <StringTable CompanyName="kilrkrow" FileDescription="Sift - Windows event log viewer" InternalName="sift" LegalCopyright="Copyright (c) 2026 kilrkrow" OriginalFilename="sift.exe" ProductName="Sift" ProductVersion="0.1.0"/>
+      <StringTable CompanyName="kilrkrow" FileDescription="Sift - Windows event log viewer" InternalName="sift" LegalCopyright="Copyright (c) 2026 kilrkrow" OriginalFilename="sift.exe" ProductName="Sift" ProductVersion="0.1.1"/>
     </VersionInfo>
     <BuildModes>
       <Item Name="Release-win64" Default="True"/>
@@ -67,8 +67,9 @@
         </Options>
       </Linking>
       <Other>
+        <CustomOptions Value="-WR"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -112,7 +113,7 @@
       <Other>
         <CustomOptions Value="-dSIFT_HARNESS"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -156,7 +157,7 @@
       <Other>
         <CustomOptions Value="-dSIFT_HARNESS"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -256,8 +257,9 @@
       </Options>
     </Linking>
     <Other>
+      <CustomOptions Value="-WR"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
       </ExecuteAfter>
     </Other>
   </CompilerOptions>

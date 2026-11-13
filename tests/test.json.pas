@@ -24,6 +24,7 @@ type
     procedure GoldenV1;
     procedure RejectsBadInput;
     procedure FileSaveLoad;
+    procedure HugeCapsAreClamped;
   end;
 
 implementation
@@ -118,7 +119,7 @@ begin
     F.Channels.Add('file://C:\x\a b.evtx');
     F.AddTerm(MakeTerm(sfChannel, saExclude, 'Setup'));
     F.AddTerm(MakeTerm(sfLevel, saInclude, 'Error'));
-    F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s "quoted" & <x>'));
+    F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s & <x>'));
     F.AddTerm(MakeTerm(sfEventId, saExclude, '7036'));
     F.AddTerm(MakeTerm(sfTask, saInclude, '12'));
     F.AddTerm(MakeTerm(sfKeywords, saInclude, '0x80'));
@@ -237,6 +238,28 @@ begin
   finally
     F.Free;
     G.Free;
+  end;
+end;
+
+
+procedure TFilterJsonTests.HugeCapsAreClamped;
+var
+  F: TSiftFilter;
+  J: string;
+begin
+  F := TSiftFilter.Create;
+  try
+    J := '{"siftFilterVersion":1,"channels":["System"],"lastN":2147483647,"textScanCap":2147483647}';
+    FilterFromJson(J, F);
+    AssertEquals(MaxLastN, F.LastN);
+    AssertEquals(MaxTextScanCap, F.TextScanCap);
+    { A documented small value still loads as-is. }
+    J := '{"siftFilterVersion":1,"channels":["System"],"lastN":40,"textScanCap":20000}';
+    FilterFromJson(J, F);
+    AssertEquals(40, F.LastN);
+    AssertEquals(20000, F.TextScanCap);
+  finally
+    F.Free;
   end;
 end;
 

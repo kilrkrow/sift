@@ -13,7 +13,8 @@ uses
   StdCtrls, ExtCtrls, ComCtrls, Grids, Menus, Buttons, Clipbrd, LCLType,
   LCLIntf, CheckLst, Generics.Collections,
   Sift.EvtApi, Sift.Filter, Sift.Compiler, Sift.FilterJson, Sift.Query,
-  Sift.Channels, Sift.Sids, Sift.Shell, Sift.ColFit, Sift.PubMeta, Sift.Toolbar;
+  Sift.Channels, Sift.Sids, Sift.Shell, Sift.ColFit, Sift.PubMeta, Sift.Toolbar,
+  Sift.Elevate;
 
 type
   TSiftMainForm = class;
@@ -440,12 +441,15 @@ constructor TQueryThread.Create(AOwner: TSiftMainForm; F: TSiftFilter;
 begin
   FOwner := AOwner;
   FFilter := F.Clone;
-  { "All time" with no last-N on a big log (Security, or all logs) can mean
-    millions of rows: cap it to the newest RowCap rows. }
-  if (RowCap > 0) and (FFilter.LastN = 0) and (FFilter.TimeMode = tmAll) then
+  { Hard ceiling: a query never holds more than RowCap rows, even when
+    lastN was set (or was 0 for "all time" / a time window). }
+  if RowCap > 0 then
   begin
-    FFilter.SetLastN(RowCap);
-    FCapApplied := RowCap;
+    if (FFilter.LastN = 0) or (FFilter.LastN > ClampRowCap(RowCap)) then
+    begin
+      FFilter.ApplyRowCap(RowCap);
+      FCapApplied := FFilter.LastN;
+    end;
   end;
   FAll := TStringList.Create;
   FAll.Assign(All);
@@ -533,7 +537,7 @@ begin
   FTaskCache := specialize TDictionary<string, string>.Create;
   FRedactMap := TStringList.Create;
   FSettings := TSiftSettings.Create;
-  FRowCap := FSettings.ReadInt('AllTimeRowCap', 200000);
+  FRowCap := ClampRowCap(FSettings.ReadInt('AllTimeRowCap', DefaultAllTimeRowCap));
   FWrap := FSettings.ReadBool('MessageWrap', False);
   FWrapRows := specialize TDictionary<Integer, Boolean>.Create;
   FLastFitCol := -1;
@@ -550,7 +554,8 @@ begin
   OnDestroy := @FormDestroyHandler;
   OnResize := @FormResizeHandler;
   LoadChannels;
-  FFilter.Channels.CommaText := FSettings.ReadStr('Channels', 'System,Application');
+  LoadValidatedChannels(FSettings.ReadStr('Channels', 'System,Application'),
+    FFilter.Channels, nil);
   if FFilter.Channels.Count = 0 then
   begin
     FFilter.Channels.Add('System');
@@ -742,8 +747,7 @@ begin
   FEdText.TextHint := 'contains...';
   FBtnTextInc := MakeButton(FRow2, 'Include', 70, @TextIncClick);
   FBtnTextExc := MakeButton(FRow2, 'Exclude', 70, @TextExcClick);
-  FLblTextNote := MakeLabel(FRow2, '(client-side text match: slower, capped at ' +
-    IntToStr(DefaultTextScanCap) + ' events)');
+  FLblTextNote := MakeLabel(FRow2, '(client-side text match: slower for large scans)');
   FLblTextNote.Font.Color := clGrayText;
 
   { chips }
@@ -1459,7 +1463,7 @@ begin
     RunNow
   else
   begin
-    FStatus.Panels[3].Text := 'Max: enter a whole number from 0 to 1000000 (empty = no limit)';
+    FStatus.Panels[3].Text := 'Large row counts take longer to load.';
     SyncToolbar;
   end;
 end;
@@ -2680,23 +2684,25 @@ end;
 
 procedure TSiftMainForm.ElevateClick(Sender: TObject);
 var
-  P, Err: string;
+  P, Hash, Err, Params: string;
 begin
-  P := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'sift-restart' + SiftFilterFileExt;
-  try
-    SaveFilterFile(FFilter, P);
-  except
-    P := '';
+  if not WriteElevationFilter(FFilter, P, Hash, Err) then
+  begin
+    MessageDlg('Sift', Err, mtWarning, [mbOK], 0);
+    Exit;
   end;
-  if P <> '' then
-    P := '--filter "' + P + '"';
-  if RestartElevated(P, Err) then
+  Params := '--filter "' + P + '" --filter-sha256 ' + Hash;
+  if RestartElevated(Params, Err) then
   begin
     FReallyClose := True;
     Close;
   end
   else
+  begin
+    if P <> '' then
+      DeleteFile(P);
     MessageDlg('Sift', Err, mtInformation, [mbOK], 0);
+  end;
 end;
 
 procedure TSiftMainForm.CopyQueryClick(Sender: TObject);
@@ -2705,12 +2711,11 @@ begin
 end;
 
 procedure TSiftMainForm.CopyFHClick(Sender: TObject);
-var
-  C: TSiftCompiled;
 begin
-  C := CompileFilter(FFilter, FAllChannels);
-  if C.FilterHashtable <> '' then
-    Clipboard.AsText := C.FilterHashtable;
+  { The query panel already filled FMemoFH with either the FilterHashtable
+    one-liner or CompilePowerShell (the same function Export as PowerShell
+    writes to the .ps1). Copy that exact text. }
+  Clipboard.AsText := FMemoFH.Text;
 end;
 
 procedure TSiftMainForm.ExportPsClick(Sender: TObject);
@@ -2767,6 +2772,7 @@ end;
 procedure TSiftMainForm.MiOpenEvtxClick(Sender: TObject);
 var
   D: TOpenDialog;
+  Ch, Err: string;
 begin
   D := TOpenDialog.Create(Self);
   try
@@ -2774,8 +2780,14 @@ begin
     D.Filter := 'Event log files (*.evtx)|*.evtx';
     if D.Execute then
     begin
+      if not TryFileChannelFromPath(D.FileName, Ch, Err) then
+      begin
+        MessageDlg('Sift', 'That log file path is not a local drive path and will not be opened. ' + Err,
+          mtWarning, [mbOK], 0);
+        Exit;
+      end;
       FFilter.Channels.Clear;
-      FFilter.Channels.Add('file://' + D.FileName);
+      FFilter.Channels.Add(Ch);
       UpdateLogsCaption;
       RunNow;
     end;
@@ -2878,8 +2890,18 @@ begin
 end;
 
 procedure TSiftMainForm.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+var
+  Persist: TStringList;
 begin
-  FSettings.WriteStr('Channels', FFilter.Channels.CommaText);
+  { Never write a remote / UNC channel to sift.ini, even if one was
+    somehow sitting on the filter. }
+  Persist := TStringList.Create;
+  try
+    LoadValidatedChannels(FFilter.Channels.CommaText, Persist, nil);
+    FSettings.WriteStr('Channels', Persist.CommaText);
+  finally
+    Persist.Free;
+  end;
   if (not FReallyClose) and FTrayOk and FMiCloseTray.Checked then
   begin
     CanClose := False;

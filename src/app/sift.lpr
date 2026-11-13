@@ -4,22 +4,33 @@ program sift;
 
 {$mode objfpc}{$H+}
 
+{ ASLR (DYNAMIC_BASE), NX (NX_COMPAT), and on win64 high-entropy VA.
+  Combined with the -WR linker option on both Release modes so the PE
+  keeps a .reloc section (DYNAMIC_BASE needs relocations). Terminal
+  Server Aware is kept ($8000). }
+{$IFDEF WIN64}
+  {$SETPEOPTFLAGS $8160}
+{$ELSE}
+  {$SETPEOPTFLAGS $8140}
+{$ENDIF}
+
 uses
+  Sift.SafeInit,
   Interfaces, Forms, SysUtils, Classes, Sift.MainForm,
   {$IFDEF SIFT_HARNESS}
   { headless screenshot / self-test harness: only in the Harness-* build
     modes, never in the Release exes }
   Sift.Harness,
   {$ENDIF}
-  Sift.Filter, Sift.FilterJson;
+  Sift.Filter, Sift.FilterJson, Sift.Elevate;
 
 {$R *.res}
 
 var
   I: Integer;
-  FilterFile: string;
+  FilterFile, FilterHash, ConsumeErr: string;
   G: TSiftFilter;
-  StartTray: Boolean;
+  StartTray, Loaded: Boolean;
 begin
   {$IFDEF SIFT_HARNESS}
   HarnessTrace('main');
@@ -37,11 +48,14 @@ begin
   end;
   {$ENDIF}
   FilterFile := '';
+  FilterHash := '';
   StartTray := False;
   for I := 1 to ParamCount do
   begin
     if (ParamStr(I) = '--filter') and (I < ParamCount) then
       FilterFile := ParamStr(I + 1);
+    if (ParamStr(I) = '--filter-sha256') and (I < ParamCount) then
+      FilterHash := ParamStr(I + 1);
     if ParamStr(I) = '--tray' then
       StartTray := True;
   end;
@@ -49,16 +63,24 @@ begin
   SiftMainForm.EnableTray;
   if StartTray and SiftMainForm.TrayAvailable then
     Application.ShowMainForm := False;
-  if (FilterFile <> '') and FileExists(FilterFile) then
+  if FilterFile <> '' then
   begin
     G := TSiftFilter.Create;
     try
+      Loaded := False;
+      if FilterHash <> '' then
+        Loaded := ConsumeElevationFilter(FilterFile, FilterHash, G, ConsumeErr)
+      else if FileExists(FilterFile) then
       try
         LoadFilterFile(FilterFile, G);
-        SiftMainForm.ApplyFilter(G);
+        Loaded := True;
       except
-        SiftMainForm.RunNow;
+        Loaded := False;
       end;
+      if Loaded then
+        SiftMainForm.ApplyFilter(G)
+      else
+        SiftMainForm.RunNow;
     finally
       G.Free;
     end;

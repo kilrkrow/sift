@@ -9,7 +9,7 @@ unit Test.Compiler;
 interface
 
 uses
-  SysUtils, Classes, fpcunit, testregistry, Sift.Filter, Sift.Compiler;
+  SysUtils, Classes, fpcunit, testregistry, base64, Sift.Filter, Sift.Compiler, Test.Util;
 
 type
   TCompilerGoldenTests = class(TTestCase)
@@ -39,6 +39,9 @@ type
     procedure FilterHashtableTextTerm;
     procedure PowerShellExportShape;
     procedure PowerShellExportTextAndLastN;
+    procedure PowerShellQueryIsBase64NotHereString;
+    procedure PowerShellValidAtQuoteRunsAsSingleAssignment;
+    procedure PowerShellPerChannelQueriesAreBase64;
     procedure RecordQuery;
   end;
 
@@ -65,6 +68,23 @@ end;
 function TCompilerGoldenTests.FH: string;
 begin
   Result := CompileFilter(F, nil).FilterHashtable;
+end;
+
+function QueryAssignPrefix: string;
+begin
+  Result := '$siftQuery = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(''';
+end;
+
+function DecodeAssign(const Assign: string): string;
+var
+  Pfx: string;
+begin
+  Pfx := QueryAssignPrefix;
+  if Copy(Assign, 1, Length(Pfx)) <> Pfx then
+    raise EAssertionFailed.Create('assignment is not a Base64 decode');
+  if Copy(Assign, Length(Assign) - 2, 3) <> '''))' then
+    raise EAssertionFailed.Create('assignment does not close FromBase64String');
+  Result := DecodeStringBase64(Copy(Assign, Length(Pfx) + 1, Length(Assign) - Length(Pfx) - 3));
 end;
 
 procedure TCompilerGoldenTests.EmptySystemIsStar;
@@ -98,6 +118,8 @@ begin
 end;
 
 procedure TCompilerGoldenTests.ProviderQuotingAndEscaping;
+var
+  Raised: Boolean;
 begin
   F.Channels.Add('Application');
   F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s & <Co>'));
@@ -107,6 +129,14 @@ begin
   F.AddTerm(MakeTerm(sfProvider, saInclude, 'Service Control Manager'));
   AssertEquals('    <Select Path="Application">*[System[(Provider[@Name=''Service Control Manager''])]]</Select>',
     CompileFilter(F, nil).QueryXml.Split([#13#10])[2]);
+  Raised := False;
+  try
+    F.AddTerm(MakeTerm(sfProvider, saInclude, 'x''" or 1=1 or @Name="'));
+  except
+    on EConvertError do
+      Raised := True;
+  end;
+  AssertTrue('both-quote provider is rejected', Raised);
 end;
 
 procedure TCompilerGoldenTests.KeywordsUserComputerTask;
@@ -304,12 +334,14 @@ begin
   S := CompilePowerShell(F, nil);
   L := S.Split([#13#10]);
   AssertEquals('$siftErrors = @()', L[2]);
-  AssertEquals('$siftQuery = @''', L[3]);
-  AssertEquals('<QueryList>', L[4]);
-  AssertEquals('''@', L[10]);
-  AssertEquals('$siftEvents = @(Get-WinEvent -FilterXml $siftQuery -MaxEvents 40 -ErrorAction SilentlyContinue -ErrorVariable +siftErrors -WarningAction SilentlyContinue)', L[11]);
+  AssertTrue('base64 assign', Pos('$siftQuery = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(''', L[3]) = 1);
+  AssertTrue('closes the call', Copy(L[3], Length(L[3]) - 2, 3) = '''))');
+  AssertEquals('$siftEvents = @(Get-WinEvent -FilterXml $siftQuery -MaxEvents 40 -ErrorAction SilentlyContinue -ErrorVariable +siftErrors -WarningAction SilentlyContinue)', L[4]);
+  AssertTrue('no raw QueryList', Pos('<QueryList>', S) = 0);
+  AssertTrue('no here-string opener', Pos('@''', S) = 0);
   AssertTrue('no &&', Pos('&&', S) = 0);
   AssertTrue('no SuppressHashFilter', Pos('SuppressHashFilter', S) = 0);
+  AssertEquals(CompileFilter(F, nil).QueryXml, DecodeAssign(L[3]));
 end;
 
 procedure TCompilerGoldenTests.PowerShellExportTextAndLastN;
@@ -334,6 +366,88 @@ begin
     RecordQueryXml('System', 42));
 end;
 
+procedure TCompilerGoldenTests.PowerShellQueryIsBase64NotHereString;
+var
+  S: string;
+  L: TStringArray;
+begin
+  F.Channels.Add('System');
+  F.AddTerm(MakeTerm(sfComputer, saInclude, 'O''Brien@host'));
+  S := CompilePowerShell(F, nil);
+  L := S.Split([#13#10]);
+  AssertTrue('no here-string opener', Pos('@''', S) = 0);
+  AssertTrue('no raw QueryList', Pos('<QueryList>', S) = 0);
+  AssertTrue('uses FromBase64String', Pos('[System.Convert]::FromBase64String(', S) > 0);
+  AssertEquals(CompileFilter(F, nil).QueryXml, DecodeAssign(L[3]));
+  AssertTrue('value is in the decoded XML', Pos('O''Brien@host', DecodeAssign(L[3])) > 0);
+end;
+
+procedure TCompilerGoldenTests.PowerShellValidAtQuoteRunsAsSingleAssignment;
+var
+  S, Script, OutLine: string;
+  Lines: TStringList;
+  Code: Integer;
+  L: TStringArray;
+begin
+  { BAR 3: a valid value with both ' and @ is encoded, not a here-string.
+    The generated script, run with powershell -NoProfile -File against a
+    Get-WinEvent stub, never emits PWNED and $siftQuery is one QueryList. }
+  F.Channels.Add('System');
+  F.AddTerm(MakeTerm(sfComputer, saInclude, 'O''Brien@host'));
+  F.SetLastN(10);
+  S := CompilePowerShell(F, nil);
+  AssertTrue('no here-string opener', Pos('@''', S) = 0);
+  L := S.Split([#13#10]);
+  AssertEquals(CompileFilter(F, nil).QueryXml, DecodeAssign(L[3]));
+  Lines := TStringList.Create;
+  try
+    Script :=
+      'function Get-WinEvent { [CmdletBinding()] param($FilterXml, $MaxEvents) @() }' + NL +
+      S + NL +
+      '$status = ''FAIL''' + NL +
+      'if (($siftQuery -is [string]) -and (([regex]::Matches($siftQuery, ''<QueryList>'')).Count -eq 1)) { $status = ''QUERY-OK'' }' + NL +
+      '@($status, $siftQuery) | Set-Content -Path $SiftOut';
+    Code := RunPs(Script, Lines);
+    if Lines.Count > 0 then
+      OutLine := Lines[0]
+    else
+      OutLine := '';
+    AssertEquals('powershell exit 0 (exit ' + IntToStr(Code) + ' out=' + OutLine + ')', 0, Code);
+    AssertEquals('QUERY-OK', OutLine);
+    AssertTrue('decoded query in output', Pos('O''Brien@host', Lines.Text) > 0);
+    AssertTrue('no PWNED in output', Pos('PWNED', Lines.Text) = 0);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TCompilerGoldenTests.PowerShellPerChannelQueriesAreBase64;
+var
+  S, B64, Decoded: string;
+  L: TStringArray;
+  I, N, P: Integer;
+begin
+  F.Channels.Add('System');
+  F.Channels.Add('Application');
+  F.SetLastN(5);
+  S := CompilePowerShell(F, nil);
+  AssertTrue('no here-string opener', Pos('@''', S) = 0);
+  AssertTrue('no raw QueryList', Pos('<QueryList>', S) = 0);
+  L := S.Split([#13#10]);
+  N := 0;
+  for I := 0 to High(L) do
+  begin
+    P := Pos('FromBase64String(''', L[I]);
+    if P > 0 then
+    begin
+      Inc(N);
+      B64 := Copy(L[I], P + Length('FromBase64String('''), Length(L[I]) - (P + Length('FromBase64String(''')) + 1 - 3);
+      Decoded := DecodeStringBase64(B64);
+      AssertTrue('decoded query ' + IntToStr(N), Pos('<QueryList>', Decoded) > 0);
+    end;
+  end;
+  AssertTrue('both per-channel queries encoded', N >= 2);
+end;
 initialization
   RegisterTest(TCompilerGoldenTests);
 end.

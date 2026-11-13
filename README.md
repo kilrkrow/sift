@@ -21,8 +21,31 @@ system's logs or channel settings.
 
 ## Status
 
-Phase 1, version 0.1.0. Built and tested on Windows 11 only so far; see
+Phase 1, version 0.1.1. Built and tested on Windows 11 only so far; see
 [docs/compat.md](docs/compat.md) for which Windows versions it was actually run on.
+
+## Notes for 0.1.1
+
+Security fixes. Filter values (providers, computers, message text, and the
+other free-text fields) are validated in one place; a value that contains
+both quote styles, a line equal to `'@`, or a control character is rejected
+with a visible reason, and a SID that is not `S-1-` plus at least one RID
+group is rejected the same way. PowerShell export writes the query XML as a
+Base64 blob, not a here-string, so a crafted value cannot break out of the
+script. Remote and UNC `file://` paths are rejected at the core: they are
+never queried and never written to `sift.ini`. An elevation restart writes
+a random exclusive temp file and passes a SHA-256 of its bytes; the elevated
+process verifies the hash, loads the filter, and always deletes the file.
+`lastN`, `textScanCap`, and `AllTimeRowCap` are clamped to a documented
+maximum of 200000 (a JSON file with `"lastN": 2147483647` loads clamped,
+not rejected). Both Release exes have ASLR, NX, and a `.reloc` section
+(win64 also has high-entropy VA). At start-up, `SetDefaultDllDirectories`
+is called through `GetProcAddress` (skipped if the API is missing), and
+`version.dll` is loaded only from System32, so a DLL of that name next to
+the exe is not used.
+
+There is no tag and no release for this version yet. Authenticode signing,
+branch protection, CI, and signed checksums are follow-ups.
 
 ## Toolchain
 
@@ -47,14 +70,18 @@ $LB = 'C:\lazarus\lazbuild.exe'
 ```
 
 Output: `src\app\bin\x86_64-win64\sift.exe` and `src\app\bin\i386-win32\sift.exe`.
-Each is a single exe with no runtime. Sizes at 0.1.0 (with pieces 8 to 10):
-3,818,496 bytes (win64) and 2,791,936 bytes (win32), icon included.
+Each is a single exe with no runtime. Sizes at 0.1.1: 3,950,080 bytes (win64)
+and 2,967,552 bytes (win32), icon included. Sizes at 0.1.0 (with pieces 8 to
+10) were 3,818,496 and 2,791,936.
 
-Every build mode runs `tools\Check-Imports.ps1` on the linked exe ("execute
-after" in `src\app\sift.lpi`), so a build fails when the exe has no icon
+Every build mode runs `tools\After-Link.ps1` on the linked exe ("execute
+after" in `src\app\sift.lpi`). That script removes a residual static
+`version.dll` import (the precompiled LCL) and binds it to System32, then
+runs `tools\Check-Imports.ps1`. A build fails when the exe has no icon
 (RT_GROUP_ICON with its 9 sizes) or no version resource; release builds also
-fail on any import that is not on the reviewed Windows 7 allowlist. (Harness
-builds check resources only.) If you copy `sift.lpi` under another name,
+fail on any import that is not on the reviewed Windows 7 allowlist, and on a
+PE missing ASLR (DYNAMIC_BASE), NX (NX_COMPAT), a `.reloc` section, or (win64)
+HIGH_ENTROPY_VA. (Harness builds check resources only.) If you copy `sift.lpi` under another name,
 copy `sift.ico` to the same base name too: Lazarus takes the project icon
 from `<project>.ico`. That is how one out-of-tree win64 build lost its icon.
 

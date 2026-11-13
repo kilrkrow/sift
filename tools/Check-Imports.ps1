@@ -7,7 +7,10 @@
       this script after linking, so a build without the icon fails, or
     - a DLL is imported that does not ship with Windows 7 SP1 / Server 2008 R2
       (api-ms-win-*, ext-ms-*, shcore.dll, wevtapi.dll which must be dynamic, ...), or
-    - a function on the "introduced after Windows 7" list is imported statically.
+    - a function on the "introduced after Windows 7" list is imported statically, or
+    - the PE is missing DYNAMIC_BASE (ASLR), NX_COMPAT (DEP), a .reloc section,
+      or has IMAGE_FILE_RELOCS_STRIPPED set; on PE32+ HIGH_ENTROPY_VA is also
+      required. These PE checks are skipped with -ResourcesOnly (harness builds).
   Usage (one per line):
     powershell -NoProfile -File tools\Check-Imports.ps1 -Exe src\app\bin\x86_64-win64\sift.exe
     powershell -NoProfile -File tools\Check-Imports.ps1 -Exe src\app\bin\i386-win32\sift.exe -OutFile docs\imports-win32.txt
@@ -44,10 +47,24 @@ $impRva = U32 ($ddir + 8)
 $resRva = U32 ($ddir + 16)
 $secTab = $opt + $optSize
 $secs = @()
+$reloc = $false
 for ($i = 0; $i -lt $nSec; $i++) {
   $s = $secTab + 40 * $i
-  $secs += [pscustomobject]@{ Va = (U32 ($s + 12)); VSize = (U32 ($s + 8)); Raw = (U32 ($s + 20)); RawSize = (U32 ($s + 16)) }
+  $nmBytes = New-Object byte[] 8
+  [Array]::Copy($b, $s, $nmBytes, 0, 8)
+  $nm = [System.Text.Encoding]::ASCII.GetString($nmBytes).Trim([char]0)
+  $vs = U32 ($s + 8)
+  $rs = U32 ($s + 16)
+  if ($nm -eq '.reloc' -and ($vs -gt 0 -or $rs -gt 0)) { $reloc = $true }
+  $secs += [pscustomobject]@{ Name = $nm; Va = (U32 ($s + 12)); VSize = $vs; Raw = (U32 ($s + 20)); RawSize = $rs }
 }
+$chars = U16 ($coff + 18)
+$dllc = U16 ($opt + 70)
+$DYNAMIC_BASE = 0x0040
+$HIGH_ENTROPY_VA = 0x0020
+$NX_COMPAT = 0x0100
+$RELOCS_STRIPPED = 0x0001
+$peInfo = 'skipped (resources only)'
 function Off($rva) {
   foreach ($s in $secs) {
     $size = [Math]::Max($s.VSize, $s.RawSize)
@@ -123,6 +140,15 @@ if ($Allowlist -and (Test-Path $Allowlist)) {
 } else {
   $bad.Add("allowlist not found: $Allowlist")
 }
+
+# PE security flags (S1): DYNAMIC_BASE, NX_COMPAT, .reloc present,
+# IMAGE_FILE_RELOCS_STRIPPED clear; HIGH_ENTROPY_VA on PE32+.
+if (($dllc -band $DYNAMIC_BASE) -eq 0) { $bad.Add(('PE DllCharacteristics missing DYNAMIC_BASE (ASLR): 0x{0:X4}' -f $dllc)) }
+if (($dllc -band $NX_COMPAT) -eq 0) { $bad.Add(('PE DllCharacteristics missing NX_COMPAT (DEP): 0x{0:X4}' -f $dllc)) }
+if ($is64 -and (($dllc -band $HIGH_ENTROPY_VA) -eq 0)) { $bad.Add(('PE DllCharacteristics missing HIGH_ENTROPY_VA (win64): 0x{0:X4}' -f $dllc)) }
+if (($chars -band $RELOCS_STRIPPED) -ne 0) { $bad.Add(('PE Characteristics has IMAGE_FILE_RELOCS_STRIPPED set: 0x{0:X4}' -f $chars)) }
+if (-not $reloc) { $bad.Add('PE has no .reloc section; DYNAMIC_BASE ASLR needs relocations (link with -WR)') }
+$peInfo = ('DllCharacteristics=0x{0:X4} Characteristics=0x{1:X4} DYNAMIC_BASE={2} NX_COMPAT={3} HIGH_ENTROPY_VA={4} RELOCS_STRIPPED={5} .reloc={6}' -f $dllc, $chars, [int](($dllc -band $DYNAMIC_BASE) -ne 0), [int](($dllc -band $NX_COMPAT) -ne 0), [int](($dllc -band $HIGH_ENTROPY_VA) -ne 0), [int](($chars -band $RELOCS_STRIPPED) -ne 0), [int]$reloc)
 }
 
 # ---- resources: icon groups (RT_GROUP_ICON = 14), icon images (RT_ICON = 3),
@@ -183,10 +209,11 @@ $report += "# $($dlls.Count) DLLs, $($rows.Count) functions"
 $report += "# DLLs: $($dlls -join ', ')"
 $report += "# resources: $resInfo"
 $report += "# allowlist: $(if ($allowed) { "$($allowed.Count) reviewed pairs" } else { 'missing' })"
+$report += "# PE flags: $peInfo"
 $report += $rows
 $report += ''
 if ($bad.Count -eq 0 -and $ResourcesOnly) { $report += 'VERDICT: PASS - icon and version resources present (resources only: harness build)' }
-elseif ($bad.Count -eq 0) { $report += 'VERDICT: PASS - every static import is on the reviewed Windows 7 allowlist; no post-Windows 7 DLL or function; icon and version resources present' }
+elseif ($bad.Count -eq 0) { $report += 'VERDICT: PASS - every static import is on the reviewed Windows 7 allowlist; no post-Windows 7 DLL or function; PE ASLR/NX/reloc flags present; icon and version resources present' }
 else { $report += 'VERDICT: FAIL'; $report += $bad }
 if ($OutFile -ne '') { $report | Set-Content -Encoding ASCII $OutFile }
 $report | Select-Object -First 4 | Select-Object -Last 2
