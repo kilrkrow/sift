@@ -2706,12 +2706,11 @@ begin
 end;
 
 procedure TSiftMainForm.CopyFHClick(Sender: TObject);
-var
-  C: TSiftCompiled;
 begin
-  C := CompileFilter(FFilter, FAllChannels);
-  if C.FilterHashtable <> '' then
-    Clipboard.AsText := C.FilterHashtable;
+  { The query panel already filled FMemoFH with either the FilterHashtable
+    one-liner or CompilePowerShell (the same function Export as PowerShell
+    writes to the .ps1). Copy that exact text. }
+  Clipboard.AsText := FMemoFH.Text;
 end;
 
 procedure TSiftMainForm.ExportPsClick(Sender: TObject);
