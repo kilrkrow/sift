@@ -1,8 +1,9 @@
 unit Sift.Elevate;
 
 { UAC restart: write the current filter to a new exclusive temp file with a
-  random name, pass the path and a SHA-256 of the bytes on the command line,
-  and have the elevated process verify the hash and delete the file. }
+  random name, pass the path and a SHA-256 of the written buffer on the
+  command line, and have the elevated process read the file once, verify
+  the hash on those bytes, parse that same buffer, and delete the file. }
 
 {$mode objfpc}{$H+}
 
@@ -14,11 +15,17 @@ uses
 function BytesSha256Hex(const Data: RawByteString): string;
 function FileSha256Hex(const FileName: string): string;
 { New file in the temp directory. Path is random, created with CREATE_NEW.
-  Sha256Hex is lowercase hex of the file bytes. }
+  Sha256Hex is lowercase hex of the buffer that was written, never a
+  re-read of the file. }
 function WriteElevationFilter(F: TSiftFilter; out Path, Sha256Hex: string;
   out Err: string): Boolean;
-{ Verify ExpectedSha256, load into F, always delete Path. Returns True only
-  when the hash matched and the file loaded. }
+{ Hash Data and parse Data into F. Never opens a path. Returns True only
+  when the hash matched and the buffer parsed. }
+function LoadElevationFilterBytes(const Data: RawByteString;
+  const ExpectedSha256: string; F: TSiftFilter; out Err: string): Boolean;
+{ Read Path once into memory, verify SHA-256 on those bytes, and parse
+  the same buffer. Always deletes Path. Returns True only when the hash
+  matched and the buffer loaded. }
 function ConsumeElevationFilter(const Path, ExpectedSha256: string;
   F: TSiftFilter; out Err: string): Boolean;
 
@@ -213,56 +220,69 @@ begin
     Path := '';
     Exit;
   end;
+  { Hash the buffer that was written. Never re-read the file. }
+  Sha256Hex := BytesSha256Hex(Bytes);
+  Result := True;
+end;
+
+function LoadElevationFilterBytes(const Data: RawByteString;
+  const ExpectedSha256: string; F: TSiftFilter; out Err: string): Boolean;
+begin
+  Result := False;
+  Err := '';
+  if not SameText(BytesSha256Hex(Data), ExpectedSha256) then
+  begin
+    Err := 'Temporary filter file hash did not match.';
+    Exit;
+  end;
   try
-    Sha256Hex := FileSha256Hex(Path);
+    FilterFromJson(Data, F);
+    Result := True;
   except
     on E: Exception do
-    begin
       Err := E.Message;
-      SysUtils.DeleteFile(Path);
-      Path := '';
-      Exit;
-    end;
   end;
-  Result := True;
 end;
 
 function ConsumeElevationFilter(const Path, ExpectedSha256: string;
   F: TSiftFilter; out Err: string): Boolean;
 var
-  Actual: string;
+  Data: RawByteString;
+  Fs: TFileStream;
 begin
   Result := False;
   Err := '';
+  Data := '';
   try
-    if (Path = '') or not FileExists(Path) then
+    if Path = '' then
     begin
       Err := 'Temporary filter file is missing.';
       Exit;
     end;
     try
-      Actual := FileSha256Hex(Path);
+      Fs := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+      try
+        SetLength(Data, Fs.Size);
+        if Fs.Size > 0 then
+          Fs.ReadBuffer(Data[1], Fs.Size);
+      finally
+        Fs.Free;
+      end;
     except
       on E: Exception do
       begin
-        Err := E.Message;
+        if not FileExists(Path) then
+          Err := 'Temporary filter file is missing.'
+        else
+          Err := E.Message;
         Exit;
       end;
     end;
-    if not SameText(Actual, ExpectedSha256) then
-    begin
-      Err := 'Temporary filter file hash did not match.';
-      Exit;
-    end;
-    try
-      LoadFilterFile(Path, F);
-      Result := True;
-    except
-      on E: Exception do
-        Err := E.Message;
-    end;
+    { Hash and parse the in-memory buffer only. The path is not opened
+      again after this read. }
+    Result := LoadElevationFilterBytes(Data, ExpectedSha256, F, Err);
   finally
-    if (Path <> '') and FileExists(Path) then
+    if Path <> '' then
       SysUtils.DeleteFile(Path);
   end;
 end;

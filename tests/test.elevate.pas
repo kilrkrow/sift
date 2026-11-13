@@ -9,7 +9,8 @@ unit Test.Elevate;
 interface
 
 uses
-  SysUtils, Classes, fpcunit, testregistry, Sift.Filter, Sift.Elevate;
+  SysUtils, Classes, fpcunit, testregistry, Sift.Filter, Sift.FilterJson,
+  Sift.Elevate;
 
 type
   TElevateTests = class(TTestCase)
@@ -18,6 +19,7 @@ type
     procedure WriteCreatesRandomExclusiveFile;
     procedure ConsumeLoadsAndDeletes;
     procedure ConsumeRejectsBadHashAndDeletes;
+    procedure ConsumeParsesHashedBufferNotAReread;
     procedure CancelledRestartWouldLeaveNoFile;
   end;
 
@@ -110,6 +112,60 @@ begin
     AssertTrue('reason', Pos('hash', LowerCase(Err)) > 0);
   finally
     F.Free;
+    Dest.Free;
+  end;
+end;
+
+procedure TElevateTests.ConsumeParsesHashedBufferNotAReread;
+var
+  Src, Tamper, Dest: TSiftFilter;
+  P, H, Err: string;
+  Data, TamperBody: RawByteString;
+  Fs: TFileStream;
+begin
+  { A file changed on disk after the hashed bytes were captured cannot
+    be loaded: parse uses that same buffer, never a second read. }
+  Src := TSiftFilter.Create;
+  Tamper := TSiftFilter.Create;
+  Dest := TSiftFilter.Create;
+  try
+    Src.Channels.Add('Application');
+    Src.AddTerm(MakeTerm(sfEventId, saInclude, '7036'));
+    Src.SetLastN(15);
+    Tamper.Channels.Add('Security');
+    Tamper.SetLastN(99);
+    AssertTrue(WriteElevationFilter(Src, P, H, Err));
+
+    Fs := TFileStream.Create(P, fmOpenRead or fmShareDenyWrite);
+    try
+      SetLength(Data, Fs.Size);
+      if Fs.Size > 0 then
+        Fs.ReadBuffer(Data[1], Fs.Size);
+    finally
+      Fs.Free;
+    end;
+    AssertEquals('hash of captured bytes', H, BytesSha256Hex(Data));
+
+    TamperBody := FilterToJson(Tamper);
+    Fs := TFileStream.Create(P, fmCreate);
+    try
+      if Length(TamperBody) > 0 then
+        Fs.WriteBuffer(TamperBody[1], Length(TamperBody));
+    finally
+      Fs.Free;
+    end;
+    AssertTrue('disk no longer matches hash',
+      not SameText(H, FileSha256Hex(P)));
+
+    AssertTrue('load hashed buffer',
+      LoadElevationFilterBytes(Data, H, Dest, Err));
+    AssertTrue('loaded the hashed filter', Dest.SameAs(Src));
+    AssertFalse('did not load the on-disk change', Dest.SameAs(Tamper));
+
+    SysUtils.DeleteFile(P);
+  finally
+    Src.Free;
+    Tamper.Free;
     Dest.Free;
   end;
 end;
