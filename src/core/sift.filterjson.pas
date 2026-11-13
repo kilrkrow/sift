@@ -257,12 +257,13 @@ begin
             Bad('terms[' + IntToStr(I) + '] ' + E.Message);
         end;
       end;
-    { lastN after the window: with a window it is a cap (MaxEvents) }
+    { lastN after the window: with a window it is a cap (MaxEvents).
+      Values above MaxLastN (including 2147483647) are clamped, not rejected. }
     V := O.Get('lastN', Int64(0));
     if V > 0 then
     begin
-      if V > MaxInt then
-        Bad('lastN is too large');
+      if V > MaxLastN then
+        V := MaxLastN;
       Tmp.SetMaxCount(V);
     end;
     F.Assign(Tmp);

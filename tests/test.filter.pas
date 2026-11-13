@@ -30,6 +30,7 @@ type
     procedure LevelCaptionsNormalize;
     procedure BadValuesRejected;
     procedure EffectiveChannelsRules;
+    procedure CapsClampLastNAndRowCap;
   end;
 
 implementation
@@ -226,6 +227,36 @@ begin
   R := F.EffectiveChannels(nil);
   AssertEquals(1, Length(R));
   AssertEquals('Setup', R[0]);
+end;
+
+
+procedure TRightClickTests.CapsClampLastNAndRowCap;
+begin
+  F.SetLastN(40);
+  AssertEquals(40, F.LastN);
+  F.SetLastN(0);
+  AssertEquals(0, F.LastN);
+  F.SetLastN(2147483647);
+  AssertEquals(MaxLastN, F.LastN);
+  F.SetMaxCount(2147483647);
+  AssertEquals(MaxLastN, F.LastN);
+  F.SetLastN(40);
+  F.ApplyRowCap(MaxRowCap);
+  AssertEquals('small lastN is kept', 40, F.LastN);
+  F.SetLastN(0);
+  F.ApplyRowCap(MaxRowCap);
+  AssertEquals('zero lastN becomes the row cap', MaxRowCap, F.LastN);
+  F.SetMaxCount(2147483647);
+  F.ApplyRowCap(1000);
+  AssertEquals('row cap is the hard ceiling', 1000, F.LastN);
+  F.TextScanCap := 2147483647;
+  AssertEquals(MaxTextScanCap, F.TextScanCap);
+  F.TextScanCap := DefaultTextScanCap;
+  AssertEquals(DefaultTextScanCap, F.TextScanCap);
+  AssertEquals(MaxRowCap, ClampRowCap(2147483647));
+  AssertEquals(MaxRowCap, ClampRowCap(0));
+  AssertEquals(MaxRowCap, ClampRowCap(-1));
+  AssertEquals(5000, ClampRowCap(5000));
 end;
 
 initialization

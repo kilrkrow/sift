@@ -44,7 +44,6 @@ type
   TSiftTermArray = array of TSiftTerm;
 
   { TSiftFilter }
-
   TSiftFilter = class
   private
     FChannels: TStringList;
@@ -77,6 +76,9 @@ type
 
     { Quick "Last N" buttons: newest N events, any time (clears the window). }
     procedure SetLastN(N: Integer);
+    procedure SetTextScanCapValue(N: Integer);
+    { Hard ceiling: LastN is raised from 0 or reduced if it exceeds RowCap. }
+    procedure ApplyRowCap(RowCap: Integer);
     { Toolbar max count: caps the result at N (MaxEvents) and keeps the
       current time window. 0 = no cap. }
     procedure SetMaxCount(N: Integer);
@@ -101,7 +103,7 @@ type
     property StartUtc: TDateTime read FStartUtc;
     property EndUtc: TDateTime read FEndUtc;
     property LastN: Integer read FLastN;
-    property TextScanCap: Integer read FTextScanCap write FTextScanCap;
+    property TextScanCap: Integer read FTextScanCap write SetTextScanCapValue;
   end;
 
 const
@@ -113,6 +115,13 @@ const
     'Message');
   SiftActionNames: array[TSiftAction] of string = ('include', 'exclude');
   DefaultTextScanCap = 20000;
+  { Documented maxima (v0.1.1). lastN, textScanCap and the AllTimeRowCap
+    ini value are clamped to these at parse / set time. A query never
+    holds more than MaxRowCap rows. }
+  MaxLastN = 200000;
+  MaxTextScanCap = 200000;
+  MaxRowCap = 200000;
+  DefaultAllTimeRowCap = 200000;
 
   LevelNames: array[0..5] of string = ('Information', 'Critical', 'Error',
     'Warning', 'Information', 'Verbose');
@@ -130,6 +139,9 @@ function IsValidSidString(const Value: string): Boolean;
 function IsFileChannel(const Channel: string): Boolean;
 function IsRemoteChannel(const Channel: string): Boolean;
 function IsAllowedFileChannel(const Channel: string): Boolean;
+function ClampLastN(N: Integer): Integer;
+function ClampTextScanCap(N: Integer): Integer;
+function ClampRowCap(N: Integer): Integer;
 
 function UtcToIso(const D: TDateTime): string;
 function IsoToUtc(const S: string; out D: TDateTime): Boolean;
@@ -476,6 +488,34 @@ end;
 
 { TSiftFilter }
 
+function ClampLastN(N: Integer): Integer;
+begin
+  if N < 0 then
+    Result := 0
+  else if N > MaxLastN then
+    Result := MaxLastN
+  else
+    Result := N;
+end;
+
+function ClampTextScanCap(N: Integer): Integer;
+begin
+  if N < 0 then
+    Result := 0
+  else if N > MaxTextScanCap then
+    Result := MaxTextScanCap
+  else
+    Result := N;
+end;
+
+function ClampRowCap(N: Integer): Integer;
+begin
+  if (N <= 0) or (N > MaxRowCap) then
+    Result := MaxRowCap
+  else
+    Result := N;
+end;
+
 constructor TSiftFilter.Create;
 begin
   inherited Create;
@@ -639,8 +679,7 @@ end;
 
 procedure TSiftFilter.SetLastN(N: Integer);
 begin
-  if N < 0 then
-    N := 0;
+  N := ClampLastN(N);
   FLastN := N;
   if N > 0 then
     ClearWindow;
@@ -648,9 +687,19 @@ end;
 
 procedure TSiftFilter.SetMaxCount(N: Integer);
 begin
-  if N < 0 then
-    N := 0;
-  FLastN := N;
+  FLastN := ClampLastN(N);
+end;
+
+procedure TSiftFilter.SetTextScanCapValue(N: Integer);
+begin
+  FTextScanCap := ClampTextScanCap(N);
+end;
+
+procedure TSiftFilter.ApplyRowCap(RowCap: Integer);
+begin
+  RowCap := ClampRowCap(RowCap);
+  if (FLastN = 0) or (FLastN > RowCap) then
+    SetMaxCount(RowCap);
 end;
 
 procedure TSiftFilter.SetRelativeWindow(Ms: Int64);

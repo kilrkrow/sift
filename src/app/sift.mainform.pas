@@ -441,12 +441,15 @@ constructor TQueryThread.Create(AOwner: TSiftMainForm; F: TSiftFilter;
 begin
   FOwner := AOwner;
   FFilter := F.Clone;
-  { "All time" with no last-N on a big log (Security, or all logs) can mean
-    millions of rows: cap it to the newest RowCap rows. }
-  if (RowCap > 0) and (FFilter.LastN = 0) and (FFilter.TimeMode = tmAll) then
+  { Hard ceiling: a query never holds more than RowCap rows, even when
+    lastN was set (or was 0 for "all time" / a time window). }
+  if RowCap > 0 then
   begin
-    FFilter.SetLastN(RowCap);
-    FCapApplied := RowCap;
+    if (FFilter.LastN = 0) or (FFilter.LastN > ClampRowCap(RowCap)) then
+    begin
+      FFilter.ApplyRowCap(RowCap);
+      FCapApplied := FFilter.LastN;
+    end;
   end;
   FAll := TStringList.Create;
   FAll.Assign(All);
@@ -534,7 +537,7 @@ begin
   FTaskCache := specialize TDictionary<string, string>.Create;
   FRedactMap := TStringList.Create;
   FSettings := TSiftSettings.Create;
-  FRowCap := FSettings.ReadInt('AllTimeRowCap', 200000);
+  FRowCap := ClampRowCap(FSettings.ReadInt('AllTimeRowCap', DefaultAllTimeRowCap));
   FWrap := FSettings.ReadBool('MessageWrap', False);
   FWrapRows := specialize TDictionary<Integer, Boolean>.Create;
   FLastFitCol := -1;
