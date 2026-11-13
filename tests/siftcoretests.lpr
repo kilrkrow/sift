@@ -10,7 +10,7 @@ program siftcoretests;
 
 uses
   Classes, SysUtils, fpcunit, testregistry, Test.Util, Test.Compiler,
-  Test.Filter, Test.Json, Test.EvtApi, Test.Equivalence, Test.ColFit, Test.PubMeta, Test.Toolbar, Test.TzTime, Test.Validation;
+  Test.Filter, Test.Json, Test.EvtApi, Test.Equivalence, Test.ColFit, Test.PubMeta, Test.Toolbar, Test.TzTime, Test.Validation, Test.Elevate;
 
 type
   TSummary = class(TInterfacedObject, ITestListener)

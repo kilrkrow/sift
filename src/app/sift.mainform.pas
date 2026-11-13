@@ -13,7 +13,8 @@ uses
   StdCtrls, ExtCtrls, ComCtrls, Grids, Menus, Buttons, Clipbrd, LCLType,
   LCLIntf, CheckLst, Generics.Collections,
   Sift.EvtApi, Sift.Filter, Sift.Compiler, Sift.FilterJson, Sift.Query,
-  Sift.Channels, Sift.Sids, Sift.Shell, Sift.ColFit, Sift.PubMeta, Sift.Toolbar;
+  Sift.Channels, Sift.Sids, Sift.Shell, Sift.ColFit, Sift.PubMeta, Sift.Toolbar,
+  Sift.Elevate;
 
 type
   TSiftMainForm = class;
@@ -2681,23 +2682,25 @@ end;
 
 procedure TSiftMainForm.ElevateClick(Sender: TObject);
 var
-  P, Err: string;
+  P, Hash, Err, Params: string;
 begin
-  P := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'sift-restart' + SiftFilterFileExt;
-  try
-    SaveFilterFile(FFilter, P);
-  except
-    P := '';
+  if not WriteElevationFilter(FFilter, P, Hash, Err) then
+  begin
+    MessageDlg('Sift', Err, mtWarning, [mbOK], 0);
+    Exit;
   end;
-  if P <> '' then
-    P := '--filter "' + P + '"';
-  if RestartElevated(P, Err) then
+  Params := '--filter "' + P + '" --filter-sha256 ' + Hash;
+  if RestartElevated(Params, Err) then
   begin
     FReallyClose := True;
     Close;
   end
   else
+  begin
+    if P <> '' then
+      DeleteFile(P);
     MessageDlg('Sift', Err, mtInformation, [mbOK], 0);
+  end;
 end;
 
 procedure TSiftMainForm.CopyQueryClick(Sender: TObject);
