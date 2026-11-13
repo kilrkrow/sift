@@ -54,8 +54,8 @@ function NotificationAreaAvailable: Boolean;
 { Re-launches this exe through the "runas" verb (the user sees UAC). }
 function RestartElevated(const Params: string; out Err: string): Boolean;
 
-function FileVersionString: string;  { e.g. '0.1.0' (from VERSIONINFO) }
-function FileVersionFull: string;    { e.g. '0.1.0.0' }
+function FileVersionString: string;  { e.g. '0.1.1' (from VERSIONINFO) }
+function FileVersionFull: string;    { e.g. '0.1.1.0' }
 function VersionInfoValue(const Key: string): string;
 
 implementation
