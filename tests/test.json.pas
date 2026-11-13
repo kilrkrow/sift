@@ -118,7 +118,7 @@ begin
     F.Channels.Add('file://C:\x\a b.evtx');
     F.AddTerm(MakeTerm(sfChannel, saExclude, 'Setup'));
     F.AddTerm(MakeTerm(sfLevel, saInclude, 'Error'));
-    F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s "quoted" & <x>'));
+    F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s & <x>'));
     F.AddTerm(MakeTerm(sfEventId, saExclude, '7036'));
     F.AddTerm(MakeTerm(sfTask, saInclude, '12'));
     F.AddTerm(MakeTerm(sfKeywords, saInclude, '0x80'));

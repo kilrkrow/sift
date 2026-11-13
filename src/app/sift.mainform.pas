@@ -550,7 +550,8 @@ begin
   OnDestroy := @FormDestroyHandler;
   OnResize := @FormResizeHandler;
   LoadChannels;
-  FFilter.Channels.CommaText := FSettings.ReadStr('Channels', 'System,Application');
+  LoadValidatedChannels(FSettings.ReadStr('Channels', 'System,Application'),
+    FFilter.Channels, nil);
   if FFilter.Channels.Count = 0 then
   begin
     FFilter.Channels.Add('System');

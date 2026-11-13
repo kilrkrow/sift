@@ -124,6 +124,12 @@ function TermCaption(const T: TSiftTerm): string;
 function FieldFromName(const S: string; out F: TSiftField): Boolean;
 function NormalizeTermValue(Field: TSiftField; const Value: string;
   out Normalized: string): Boolean;
+{ Shared by JSON load, paste, --filter, ini reload and right-click Include. }
+function UnsafeValueReason(const Value: string): string;
+function IsValidSidString(const Value: string): Boolean;
+function IsFileChannel(const Channel: string): Boolean;
+function IsRemoteChannel(const Channel: string): Boolean;
+function IsAllowedFileChannel(const Channel: string): Boolean;
 
 function UtcToIso(const D: TDateTime): string;
 function IsoToUtc(const S: string; out D: TDateTime): Boolean;
@@ -256,6 +262,158 @@ begin
       Exit(False);
 end;
 
+function HasControlChars(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(S) do
+    if (Ord(S[I]) < 32) or (Ord(S[I]) = 127) then
+      Exit(True);
+  Result := False;
+end;
+
+function HasHereStringCloserLine(const S: string): Boolean;
+var
+  L: TStringList;
+  I: Integer;
+begin
+  if S = '''@' then
+    Exit(True);
+  L := TStringList.Create;
+  try
+    L.Text := S;
+    for I := 0 to L.Count - 1 do
+      if L[I] = '''@' then
+        Exit(True);
+  finally
+    L.Free;
+  end;
+  Result := False;
+end;
+
+function HasBothQuoteTypes(const S: string): Boolean;
+begin
+  Result := (Pos('''', S) > 0) and (Pos('"', S) > 0);
+end;
+
+function UnsafeValueReason(const Value: string): string;
+begin
+  if HasControlChars(Value) then
+    Exit('contains control characters');
+  if HasHereStringCloserLine(Value) then
+    Exit('contains a line equal to ''@');
+  if HasBothQuoteTypes(Value) then
+    Exit('contains both single and double quotes');
+  Result := '';
+end;
+
+function IsValidSidString(const Value: string): Boolean;
+var
+  I, Digits, Groups: Integer;
+begin
+  Result := False;
+  if Length(Value) < 7 then
+    Exit;
+  if (Value[1] <> 'S') or (Value[2] <> '-') or (Value[3] <> '1') or
+     (Value[4] <> '-') then
+    Exit;
+  I := 5;
+  Digits := 0;
+  Groups := 0;
+  while I <= Length(Value) do
+  begin
+    if Value[I] = '-' then
+    begin
+      if Digits = 0 then
+        Exit;
+      Inc(Groups);
+      Digits := 0;
+    end
+    else if Value[I] in ['0'..'9'] then
+      Inc(Digits)
+    else
+      Exit;
+    Inc(I);
+  end;
+  Result := (Digits > 0) and (Groups >= 1);
+end;
+
+function IsFileChannel(const Channel: string): Boolean;
+var
+  S: string;
+begin
+  S := Trim(Channel);
+  Result := SameText(Copy(S, 1, 7), 'file://') or
+    SameText(Copy(S, 1, 5), 'file:');
+end;
+
+function StripFileScheme(const Channel: string): string;
+var
+  S: string;
+begin
+  S := Trim(Channel);
+  if SameText(Copy(S, 1, 7), 'file://') then
+    Result := Copy(S, 8, MaxInt)
+  else if SameText(Copy(S, 1, 5), 'file:') then
+    Result := Copy(S, 6, MaxInt)
+  else
+    Result := S;
+end;
+
+function BackslashPath(const S: string): string;
+begin
+  Result := StringReplace(S, '/', '\', [rfReplaceAll]);
+end;
+
+function IsExtendedLocalDrive(const Q: string): Boolean;
+begin
+  { Q uses backslashes. \\?\X: with X a drive letter, not \\?\UNC. }
+  Result := (Length(Q) >= 6) and (Q[1] = '\') and (Q[2] = '\') and
+    (Q[3] = '?') and (Q[4] = '\') and (Q[5] in ['A'..'Z', 'a'..'z']) and
+    (Q[6] = ':');
+end;
+
+function IsRemoteChannel(const Channel: string): Boolean;
+var
+  Raw, Q: string;
+  I: Integer;
+begin
+  Raw := Trim(Channel);
+  Q := BackslashPath(StripFileScheme(Raw));
+  if IsExtendedLocalDrive(Q) then
+    Exit(False);
+  if (Length(Q) >= 2) and (Q[1] = '\') and (Q[2] = '\') then
+    Exit(True);
+  if IsFileChannel(Raw) then
+  begin
+    I := 1;
+    while (I <= Length(Q)) and (Q[I] = '\') do
+      Inc(I);
+    if (I < Length(Q)) and (Q[I] in ['A'..'Z', 'a'..'z']) and (Q[I + 1] = ':') then
+      Exit(False);
+    Exit(True);
+  end;
+  Result := False;
+end;
+
+function IsAllowedFileChannel(const Channel: string): Boolean;
+var
+  Q: string;
+  I: Integer;
+begin
+  Result := False;
+  if not IsFileChannel(Channel) or IsRemoteChannel(Channel) then
+    Exit;
+  Q := BackslashPath(StripFileScheme(Channel));
+  if IsExtendedLocalDrive(Q) then
+    Exit(True);
+  I := 1;
+  while (I <= Length(Q)) and (Q[I] = '\') do
+    Inc(I);
+  Result := (I + 2 <= Length(Q)) and (Q[I] in ['A'..'Z', 'a'..'z']) and
+    (Q[I + 1] = ':') and (Q[I + 2] = '\');
+end;
+
 function NormalizeTermValue(Field: TSiftField; const Value: string;
   out Normalized: string): Boolean;
 var
@@ -270,6 +428,11 @@ begin
   Result := V <> '';
   if not Result then
     Exit;
+  if UnsafeValueReason(V) <> '' then
+  begin
+    Result := False;
+    Exit;
+  end;
   case Field of
     sfLevel:
       begin
@@ -302,8 +465,11 @@ begin
           Normalized := UtcToIso(D);
       end;
     sfUser:
-      Result := (Length(V) > 4) and SameText(Copy(V, 1, 2), 'S-');
-    sfProvider, sfComputer, sfChannel, sfMessage:
+      Result := IsValidSidString(V);
+    sfChannel:
+      Result := (not IsRemoteChannel(V)) and
+        ((not IsFileChannel(V)) or IsAllowedFileChannel(V));
+    sfProvider, sfComputer, sfMessage:
       Result := True;
   end;
 end;

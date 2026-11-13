@@ -200,8 +200,14 @@ begin
   Expect(sfEventId, '70000');
   Expect(sfTime, 'yesterday');
   Expect(sfUser, 'SYSTEM');
+  Expect(sfUser, 'S-x');
+  Expect(sfUser, 'S-1-5-18''');
+  Expect(sfUser, 'S-junk');
   Expect(sfProvider, '  ');
   AssertEquals(0, F.TermCount);
+  F.AddTerm(MakeTerm(sfUser, saInclude, 'S-1-5-18'));
+  F.AddTerm(MakeTerm(sfUser, saInclude, 'S-1-5-21-1-2-3-1001'));
+  AssertEquals(2, F.TermCount);
 end;
 
 procedure TRightClickTests.EffectiveChannelsRules;

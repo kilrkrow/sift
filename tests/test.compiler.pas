@@ -98,6 +98,8 @@ begin
 end;
 
 procedure TCompilerGoldenTests.ProviderQuotingAndEscaping;
+var
+  Raised: Boolean;
 begin
   F.Channels.Add('Application');
   F.AddTerm(MakeTerm(sfProvider, saInclude, 'Bob''s & <Co>'));
@@ -107,6 +109,14 @@ begin
   F.AddTerm(MakeTerm(sfProvider, saInclude, 'Service Control Manager'));
   AssertEquals('    <Select Path="Application">*[System[(Provider[@Name=''Service Control Manager''])]]</Select>',
     CompileFilter(F, nil).QueryXml.Split([#13#10])[2]);
+  Raised := False;
+  try
+    F.AddTerm(MakeTerm(sfProvider, saInclude, 'x''" or 1=1 or @Name="'));
+  except
+    on EConvertError do
+      Raised := True;
+  end;
+  AssertTrue('both-quote provider is rejected', Raised);
 end;
 
 procedure TCompilerGoldenTests.KeywordsUserComputerTask;
