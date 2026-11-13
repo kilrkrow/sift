@@ -747,8 +747,7 @@ begin
   FEdText.TextHint := 'contains...';
   FBtnTextInc := MakeButton(FRow2, 'Include', 70, @TextIncClick);
   FBtnTextExc := MakeButton(FRow2, 'Exclude', 70, @TextExcClick);
-  FLblTextNote := MakeLabel(FRow2, '(client-side text match: slower, capped at ' +
-    IntToStr(DefaultTextScanCap) + ' events)');
+  FLblTextNote := MakeLabel(FRow2, '(client-side text match: slower for large scans)');
   FLblTextNote.Font.Color := clGrayText;
 
   { chips }
@@ -1464,7 +1463,7 @@ begin
     RunNow
   else
   begin
-    FStatus.Panels[3].Text := 'Max: enter a whole number from 0 to 1000000 (empty = no limit)';
+    FStatus.Panels[3].Text := 'Large row counts take longer to load.';
     SyncToolbar;
   end;
 end;
