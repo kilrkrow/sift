@@ -2767,6 +2767,7 @@ end;
 procedure TSiftMainForm.MiOpenEvtxClick(Sender: TObject);
 var
   D: TOpenDialog;
+  Ch, Err: string;
 begin
   D := TOpenDialog.Create(Self);
   try
@@ -2774,8 +2775,14 @@ begin
     D.Filter := 'Event log files (*.evtx)|*.evtx';
     if D.Execute then
     begin
+      if not TryFileChannelFromPath(D.FileName, Ch, Err) then
+      begin
+        MessageDlg('Sift', 'That log file path is not a local drive path and will not be opened. ' + Err,
+          mtWarning, [mbOK], 0);
+        Exit;
+      end;
       FFilter.Channels.Clear;
-      FFilter.Channels.Add('file://' + D.FileName);
+      FFilter.Channels.Add(Ch);
       UpdateLogsCaption;
       RunNow;
     end;
@@ -2878,8 +2885,18 @@ begin
 end;
 
 procedure TSiftMainForm.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+var
+  Persist: TStringList;
 begin
-  FSettings.WriteStr('Channels', FFilter.Channels.CommaText);
+  { Never write a remote / UNC channel to sift.ini, even if one was
+    somehow sitting on the filter. }
+  Persist := TStringList.Create;
+  try
+    LoadValidatedChannels(FFilter.Channels.CommaText, Persist, nil);
+    FSettings.WriteStr('Channels', Persist.CommaText);
+  finally
+    Persist.Free;
+  end;
   if (not FReallyClose) and FTrayOk and FMiCloseTray.Checked then
   begin
     CanClose := False;

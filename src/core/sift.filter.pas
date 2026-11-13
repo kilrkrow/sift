@@ -739,6 +739,12 @@ begin
       if I >= 0 then
         L.Delete(I);
     end;
+    { A bypass of the load-time checks must still not reach EvtQuery
+      or the PowerShell export. }
+    for I := L.Count - 1 downto 0 do
+      if IsRemoteChannel(L[I]) or
+        (IsFileChannel(L[I]) and not IsAllowedFileChannel(L[I])) then
+        L.Delete(I);
     SetLength(Result, L.Count);
     for I := 0 to L.Count - 1 do
       Result[I] := L[I];

@@ -11,7 +11,7 @@ unit Test.Validation;
 interface
 
 uses
-  SysUtils, Classes, fpcunit, testregistry, Sift.Filter, Sift.FilterJson;
+  SysUtils, Classes, fpcunit, testregistry, Sift.Filter, Sift.FilterJson, Sift.Compiler;
 
 type
   TValidationTests = class(TTestCase)
@@ -37,6 +37,9 @@ type
     procedure RightClickIncludeRejectsInjection;
     procedure SfChannelTermRejectsRemote;
     procedure StarAndNamedChannelsAccepted;
+    procedure IniPersistStripsRemote;
+    procedure OpenDialogPathLocalAndRemote;
+    procedure EffectiveChannelsAndExportDropRemote;
   end;
 
 implementation
@@ -355,6 +358,70 @@ begin
   ExpectChannelAccepted('Microsoft-Windows-Kernel-PnP/Configuration');
 end;
 
+procedure TValidationTests.IniPersistStripsRemote;
+var
+  Src, Dest: TStringList;
+begin
+  { FormCloseQuery writes LoadValidatedChannels(...).CommaText to ini. }
+  Src := TStringList.Create;
+  Dest := TStringList.Create;
+  try
+    Src.Add('System');
+    Src.Add('file://\\host\share\x.evtx');
+    Src.Add('Application');
+    Src.Add('\\host\share\y.evtx');
+    Src.Add('file://C:\logs\local.evtx');
+    LoadValidatedChannels(Src.CommaText, Dest, nil);
+    AssertEquals(3, Dest.Count);
+    AssertEquals('System', Dest[0]);
+    AssertEquals('Application', Dest[1]);
+    AssertEquals('file://C:\logs\local.evtx', Dest[2]);
+    AssertTrue('no UNC host in persist text', Pos('\\host', Dest.CommaText) = 0);
+  finally
+    Src.Free;
+    Dest.Free;
+  end;
+end;
+
+procedure TValidationTests.OpenDialogPathLocalAndRemote;
+var
+  Ch, Err: string;
+begin
+  AssertTrue('local evtx', TryFileChannelFromPath('C:\logs\x.evtx', Ch, Err));
+  AssertEquals('file://C:\logs\x.evtx', Ch);
+  AssertFalse('UNC evtx', TryFileChannelFromPath('\\host\share\x.evtx', Ch, Err));
+  AssertTrue('remote reason', Pos('remote', LowerCase(Err)) > 0);
+  AssertFalse('extended UNC', TryFileChannelFromPath('\\?\UNC\host\share\x.evtx', Ch, Err));
+end;
+
+procedure TValidationTests.EffectiveChannelsAndExportDropRemote;
+var
+  F: TSiftFilter;
+  Ch: TStringArray;
+  C: TSiftCompiled;
+  S: string;
+begin
+  F := TSiftFilter.Create;
+  try
+    F.Channels.Add('System');
+    F.Channels.Add('file://\\host\share\x.evtx');
+    F.Channels.Add('\\host\share\y.evtx');
+    F.Channels.Add('file:////host/share/z.evtx');
+    F.Channels.Add('file://\\?\UNC\host\share\w.evtx');
+    Ch := F.EffectiveChannels(nil);
+    AssertEquals(1, Length(Ch));
+    AssertEquals('System', Ch[0]);
+    C := CompileFilter(F, nil);
+    AssertEquals(1, Length(C.Channels));
+    AssertEquals('System', C.Channels[0]);
+    AssertTrue('no host in QueryXml', Pos('host', C.QueryXml) = 0);
+    S := CompilePowerShell(F, nil);
+    AssertTrue('no UNC in export', Pos('host\share', S) = 0);
+    AssertTrue('no slash-UNC in export', Pos('host/share', S) = 0);
+  finally
+    F.Free;
+  end;
+end;
 initialization
   RegisterTest(TValidationTests);
 end.

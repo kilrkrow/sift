@@ -28,6 +28,10 @@ function ValidateChannel(const Channel: string; out Normalized: string;
   nil, appended there. }
 procedure LoadValidatedChannels(const CommaText: string; Dest: TStrings;
   Rejected: TStrings);
+{ Open-dialog .evtx path: only a local drive (or \\?\X:) becomes a
+  file:// channel. Remote / UNC paths are rejected with ErrorMsg. }
+function TryFileChannelFromPath(const FileName: string; out Channel: string;
+  out ErrorMsg: string): Boolean;
 
 type
   ESiftFilterFormat = class(Exception);
@@ -147,6 +151,17 @@ begin
   finally
     Tmp.Free;
   end;
+end;
+
+function TryFileChannelFromPath(const FileName: string; out Channel: string;
+  out ErrorMsg: string): Boolean;
+var
+  Norm: string;
+begin
+  Channel := 'file://' + FileName;
+  Result := ValidateChannel(Channel, Norm, ErrorMsg);
+  if Result then
+    Channel := Norm;
 end;
 
 procedure Bad(const Msg: string);
