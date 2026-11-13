@@ -1,0 +1,584 @@
+unit Sift.Filter;
+
+{ The Sift filter AST. One object describes everything the viewer (and later
+  the MCP server) can ask for. No LCL references. }
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  SysUtils, Classes;
+
+type
+  TSiftField = (sfChannel, sfLevel, sfProvider, sfEventId, sfTask,
+    sfKeywords, sfUser, sfComputer, sfTime, sfMessage);
+
+  TSiftAction = (saInclude, saExclude);
+
+  { How a right-click term is applied: add to the current filter, or replace
+    all include/exclude terms with this one term (channel scope and time
+    window are kept). }
+  TSiftApplyMode = (amAdd, amSet);
+
+  TSiftTimeMode = (tmAll, tmRelative, tmAbsolute);
+
+  TSiftTerm = record
+    Field: TSiftField;
+    Action: TSiftAction;
+    { Value encoding per field:
+      sfChannel   channel name or file://path
+      sfLevel     '0'..'5'; '4' (Information) also matches level 0
+      sfProvider  provider name
+      sfEventId   decimal event ID
+      sfTask      decimal task number
+      sfKeywords  decimal or 0x-hex 64-bit mask
+      sfUser      SID string (S-1-...)
+      sfComputer  computer name
+      sfTime      UTC ISO 8601 'yyyy-mm-ddThh:nn:ss.zzzZ'; Include = at or
+                  after this time, Exclude = drop at or after this time
+      sfMessage   case-insensitive substring (client-side) }
+    Value: string;
+  end;
+
+  TSiftTermArray = array of TSiftTerm;
+
+  { TSiftFilter }
+
+  TSiftFilter = class
+  private
+    FChannels: TStringList;
+    FTerms: TSiftTermArray;
+    FTimeMode: TSiftTimeMode;
+    FRelativeMs: Int64;
+    FStartUtc: TDateTime;
+    FEndUtc: TDateTime;
+    FLastN: Integer;
+    FTextScanCap: Integer;
+    function GetTerm(I: Integer): TSiftTerm;
+    function GetTermCount: Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Assign(Src: TSiftFilter);
+    function Clone: TSiftFilter;
+    function SameAs(Other: TSiftFilter): Boolean;
+    procedure Clear;
+    procedure ClearTerms;
+
+    function IndexOfTerm(const T: TSiftTerm): Integer;
+    function AddTerm(const T: TSiftTerm): Integer;
+    procedure DeleteTerm(Index: Integer);
+
+    { The right-click entry point: Include/Exclude the cell value with
+      Add-to or Set-as semantics. Returns True if the filter changed. }
+    function ApplyCell(Field: TSiftField; const Value: string;
+      Action: TSiftAction; Mode: TSiftApplyMode): Boolean;
+
+    { Quick "Last N" buttons: newest N events, any time (clears the window). }
+    procedure SetLastN(N: Integer);
+    { Toolbar max count: caps the result at N (MaxEvents) and keeps the
+      current time window. 0 = no cap. }
+    procedure SetMaxCount(N: Integer);
+    procedure SetRelativeWindow(Ms: Int64);
+    procedure SetAbsoluteWindow(StartUtc, EndUtc: TDateTime);
+    procedure ClearWindow;
+
+    function HasTextTerms: Boolean;
+    function HasExcludes: Boolean;
+    function TermsFor(Field: TSiftField; Action: TSiftAction): TStringArray;
+
+    { The channels this filter queries: Include-channel terms if present,
+      otherwise Channels; minus Exclude-channel terms. '*' in Channels means
+      every enabled Admin/Operational channel (resolved by the caller). }
+    function EffectiveChannels(const AllChannels: TStrings): TStringArray;
+
+    property Channels: TStringList read FChannels;
+    property Terms[I: Integer]: TSiftTerm read GetTerm;
+    property TermCount: Integer read GetTermCount;
+    property TimeMode: TSiftTimeMode read FTimeMode;
+    property RelativeMs: Int64 read FRelativeMs;
+    property StartUtc: TDateTime read FStartUtc;
+    property EndUtc: TDateTime read FEndUtc;
+    property LastN: Integer read FLastN;
+    property TextScanCap: Integer read FTextScanCap write FTextScanCap;
+  end;
+
+const
+  SiftFieldNames: array[TSiftField] of string = ('channel', 'level',
+    'provider', 'eventId', 'task', 'keywords', 'user', 'computer', 'time',
+    'message');
+  SiftFieldCaptions: array[TSiftField] of string = ('Channel', 'Level',
+    'Provider', 'Event ID', 'Task', 'Keywords', 'User', 'Computer', 'Time',
+    'Message');
+  SiftActionNames: array[TSiftAction] of string = ('include', 'exclude');
+  DefaultTextScanCap = 20000;
+
+  LevelNames: array[0..5] of string = ('Information', 'Critical', 'Error',
+    'Warning', 'Information', 'Verbose');
+
+function MakeTerm(Field: TSiftField; Action: TSiftAction;
+  const Value: string): TSiftTerm;
+function SameTerm(const A, B: TSiftTerm): Boolean;
+function TermCaption(const T: TSiftTerm): string;
+function FieldFromName(const S: string; out F: TSiftField): Boolean;
+function NormalizeTermValue(Field: TSiftField; const Value: string;
+  out Normalized: string): Boolean;
+
+function UtcToIso(const D: TDateTime): string;
+function IsoToUtc(const S: string; out D: TDateTime): Boolean;
+function LevelCaption(Level: Integer): string;
+function LevelFromCaption(const S: string): Integer;
+
+implementation
+
+uses
+  DateUtils;
+
+function AllDigits(const S: string): Boolean; forward;
+
+function MakeTerm(Field: TSiftField; Action: TSiftAction;
+  const Value: string): TSiftTerm;
+begin
+  Result.Field := Field;
+  Result.Action := Action;
+  Result.Value := Value;
+end;
+
+function SameTerm(const A, B: TSiftTerm): Boolean;
+begin
+  Result := (A.Field = B.Field) and (A.Action = B.Action);
+  if not Result then
+    Exit;
+  case A.Field of
+    sfProvider, sfComputer, sfChannel, sfMessage, sfUser:
+      Result := SameText(A.Value, B.Value);
+  else
+    Result := A.Value = B.Value;
+  end;
+end;
+
+function LevelCaption(Level: Integer): string;
+begin
+  if (Level >= 0) and (Level <= 5) then
+    Result := LevelNames[Level]
+  else
+    Result := 'Level ' + IntToStr(Level);
+end;
+
+function LevelFromCaption(const S: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 1 to 5 do
+    if SameText(S, LevelNames[I]) then
+      Exit(I);
+  if SameText(S, 'LogAlways') then
+    Exit(4);
+  if AllDigits(S) and (Length(S) <= 3) and TryStrToInt(S, Result) then
+    Exit;
+  Result := -1;
+end;
+
+function TermCaption(const T: TSiftTerm): string;
+var
+  V: string;
+  L: Integer;
+begin
+  V := T.Value;
+  case T.Field of
+    sfLevel:
+      begin
+        L := StrToIntDef(V, -1);
+        V := LevelCaption(L);
+      end;
+    sfTime: V := '>= ' + V;
+    sfMessage: V := '"' + V + '"';
+  end;
+  if T.Action = saInclude then
+    Result := SiftFieldCaptions[T.Field] + ' = ' + V
+  else
+    Result := 'NOT ' + SiftFieldCaptions[T.Field] + ' = ' + V;
+end;
+
+function FieldFromName(const S: string; out F: TSiftField): Boolean;
+var
+  X: TSiftField;
+begin
+  for X := Low(TSiftField) to High(TSiftField) do
+    if SameText(SiftFieldNames[X], S) then
+    begin
+      F := X;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function UtcToIso(const D: TDateTime): string;
+begin
+  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"."zzz"Z"', D);
+end;
+
+function IsoToUtc(const S: string; out D: TDateTime): Boolean;
+var
+  Y, Mo, Dd, H, Mi, Se, Ms: Integer;
+  T: string;
+begin
+  Result := False;
+  T := Trim(S);
+  if (Length(T) < 20) or (T[5] <> '-') or (T[8] <> '-') or
+     not (T[11] in ['T', 't', ' ']) or (T[14] <> ':') or (T[17] <> ':') then
+    Exit;
+  if not TryStrToInt(Copy(T, 1, 4), Y) then Exit;
+  if not TryStrToInt(Copy(T, 6, 2), Mo) then Exit;
+  if not TryStrToInt(Copy(T, 9, 2), Dd) then Exit;
+  if not TryStrToInt(Copy(T, 12, 2), H) then Exit;
+  if not TryStrToInt(Copy(T, 15, 2), Mi) then Exit;
+  if not TryStrToInt(Copy(T, 18, 2), Se) then Exit;
+  Ms := 0;
+  if (Length(T) >= 21) and (T[20] = '.') then
+  begin
+    if not TryStrToInt(Copy(T, 21, 3), Ms) then Exit;
+    if not (T[Length(T)] in ['Z', 'z']) then Exit;
+  end
+  else if not (T[20] in ['Z', 'z']) then
+    Exit;
+  Result := TryEncodeDateTime(Y, Mo, Dd, H, Mi, Se, Ms, D);
+end;
+
+function AllDigits(const S: string): Boolean;
+var
+  C: Char;
+begin
+  Result := S <> '';
+  for C in S do
+    if not (C in ['0'..'9']) then
+      Exit(False);
+end;
+
+function NormalizeTermValue(Field: TSiftField; const Value: string;
+  out Normalized: string): Boolean;
+var
+  N: Int64;
+  Q: QWord;
+  D: TDateTime;
+  L: Integer;
+  V: string;
+begin
+  V := Trim(Value);
+  Normalized := V;
+  Result := V <> '';
+  if not Result then
+    Exit;
+  case Field of
+    sfLevel:
+      begin
+        L := LevelFromCaption(V);
+        Result := (L >= 0) and (L <= 255);
+        if L = 0 then
+          L := 4; { Event Viewer's Information covers 0 and 4 }
+        Normalized := IntToStr(L);
+      end;
+    sfEventId, sfTask:
+      begin
+        Result := AllDigits(V) and (Length(V) <= 6) and TryStrToInt64(V, N) and
+          (N >= 0) and (N <= 65535);
+        if Result then
+          Normalized := IntToStr(N);
+      end;
+    sfKeywords:
+      begin
+        if (Length(V) > 2) and (V[1] = '0') and (V[2] in ['x', 'X']) then
+          Result := TryStrToQWord('$' + Copy(V, 3, MaxInt), Q)
+        else
+          Result := TryStrToQWord(V, Q);
+        if Result then
+          Normalized := '0x' + IntToHex(Q, 16);
+      end;
+    sfTime:
+      begin
+        Result := IsoToUtc(V, D);
+        if Result then
+          Normalized := UtcToIso(D);
+      end;
+    sfUser:
+      Result := (Length(V) > 4) and SameText(Copy(V, 1, 2), 'S-');
+    sfProvider, sfComputer, sfChannel, sfMessage:
+      Result := True;
+  end;
+end;
+
+{ TSiftFilter }
+
+constructor TSiftFilter.Create;
+begin
+  inherited Create;
+  FChannels := TStringList.Create;
+  FChannels.CaseSensitive := False;
+  FTextScanCap := DefaultTextScanCap;
+end;
+
+destructor TSiftFilter.Destroy;
+begin
+  FChannels.Free;
+  inherited Destroy;
+end;
+
+function TSiftFilter.GetTerm(I: Integer): TSiftTerm;
+begin
+  Result := FTerms[I];
+end;
+
+function TSiftFilter.GetTermCount: Integer;
+begin
+  Result := Length(FTerms);
+end;
+
+procedure TSiftFilter.Assign(Src: TSiftFilter);
+begin
+  FChannels.Assign(Src.FChannels);
+  FTerms := Copy(Src.FTerms);
+  FTimeMode := Src.FTimeMode;
+  FRelativeMs := Src.FRelativeMs;
+  FStartUtc := Src.FStartUtc;
+  FEndUtc := Src.FEndUtc;
+  FLastN := Src.FLastN;
+  FTextScanCap := Src.FTextScanCap;
+end;
+
+function TSiftFilter.Clone: TSiftFilter;
+begin
+  Result := TSiftFilter.Create;
+  Result.Assign(Self);
+end;
+
+function TSiftFilter.SameAs(Other: TSiftFilter): Boolean;
+var
+  I: Integer;
+begin
+  Result := (Other <> nil) and (FChannels.Text = Other.FChannels.Text) and
+    (Length(FTerms) = Length(Other.FTerms)) and
+    (FTimeMode = Other.FTimeMode) and (FLastN = Other.FLastN) and
+    (FTextScanCap = Other.FTextScanCap);
+  if not Result then
+    Exit;
+  case FTimeMode of
+    tmRelative: Result := FRelativeMs = Other.FRelativeMs;
+    tmAbsolute: Result := (UtcToIso(FStartUtc) = UtcToIso(Other.FStartUtc)) and
+      (UtcToIso(FEndUtc) = UtcToIso(Other.FEndUtc)) and
+      ((FStartUtc = 0) = (Other.FStartUtc = 0)) and
+      ((FEndUtc = 0) = (Other.FEndUtc = 0));
+  end;
+  if not Result then
+    Exit;
+  for I := 0 to High(FTerms) do
+    if not SameTerm(FTerms[I], Other.FTerms[I]) then
+      Exit(False);
+end;
+
+procedure TSiftFilter.Clear;
+begin
+  FChannels.Clear;
+  ClearTerms;
+  ClearWindow;
+  FLastN := 0;
+  FTextScanCap := DefaultTextScanCap;
+end;
+
+procedure TSiftFilter.ClearTerms;
+begin
+  SetLength(FTerms, 0);
+end;
+
+function TSiftFilter.IndexOfTerm(const T: TSiftTerm): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FTerms) do
+    if SameTerm(FTerms[I], T) then
+      Exit(I);
+  Result := -1;
+end;
+
+function TSiftFilter.AddTerm(const T: TSiftTerm): Integer;
+var
+  N: string;
+  X: TSiftTerm;
+begin
+  if not NormalizeTermValue(T.Field, T.Value, N) then
+    raise EConvertError.CreateFmt('Invalid %s value: %s',
+      [SiftFieldCaptions[T.Field], T.Value]);
+  X := T;
+  X.Value := N;
+  Result := IndexOfTerm(X);
+  if Result >= 0 then
+    Exit;
+  Result := Length(FTerms);
+  SetLength(FTerms, Result + 1);
+  FTerms[Result] := X;
+end;
+
+procedure TSiftFilter.DeleteTerm(Index: Integer);
+var
+  I: Integer;
+begin
+  if (Index < 0) or (Index > High(FTerms)) then
+    Exit;
+  for I := Index to High(FTerms) - 1 do
+    FTerms[I] := FTerms[I + 1];
+  SetLength(FTerms, Length(FTerms) - 1);
+end;
+
+function TSiftFilter.ApplyCell(Field: TSiftField; const Value: string;
+  Action: TSiftAction; Mode: TSiftApplyMode): Boolean;
+var
+  T, Opp: TSiftTerm;
+  Before: TSiftFilter;
+  I: Integer;
+begin
+  Before := Clone;
+  try
+    T := MakeTerm(Field, Action, Value);
+    if Mode = amSet then
+      ClearTerms
+    else
+    begin
+      { Adding the opposite of an existing term replaces it: Include X then
+        Exclude X leaves only Exclude X. }
+      Opp := T;
+      if Action = saInclude then Opp.Action := saExclude else Opp.Action := saInclude;
+      NormalizeTermValue(Field, Value, Opp.Value);
+      I := IndexOfTerm(Opp);
+      if I >= 0 then
+        DeleteTerm(I);
+    end;
+    AddTerm(T);
+    Result := not SameAs(Before);
+  finally
+    Before.Free;
+  end;
+end;
+
+procedure TSiftFilter.SetLastN(N: Integer);
+begin
+  if N < 0 then
+    N := 0;
+  FLastN := N;
+  if N > 0 then
+    ClearWindow;
+end;
+
+procedure TSiftFilter.SetMaxCount(N: Integer);
+begin
+  if N < 0 then
+    N := 0;
+  FLastN := N;
+end;
+
+procedure TSiftFilter.SetRelativeWindow(Ms: Int64);
+begin
+  FTimeMode := tmRelative;
+  FRelativeMs := Ms;
+  FStartUtc := 0;
+  FEndUtc := 0;
+  FLastN := 0;
+end;
+
+procedure TSiftFilter.SetAbsoluteWindow(StartUtc, EndUtc: TDateTime);
+begin
+  FTimeMode := tmAbsolute;
+  FRelativeMs := 0;
+  FStartUtc := StartUtc;
+  FEndUtc := EndUtc;
+  FLastN := 0;
+end;
+
+procedure TSiftFilter.ClearWindow;
+begin
+  FTimeMode := tmAll;
+  FRelativeMs := 0;
+  FStartUtc := 0;
+  FEndUtc := 0;
+end;
+
+function TSiftFilter.HasTextTerms: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FTerms) do
+    if FTerms[I].Field = sfMessage then
+      Exit(True);
+  Result := False;
+end;
+
+function TSiftFilter.HasExcludes: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FTerms) do
+    if (FTerms[I].Action = saExclude) and (FTerms[I].Field <> sfMessage) and
+       (FTerms[I].Field <> sfChannel) then
+      Exit(True);
+  Result := False;
+end;
+
+function TSiftFilter.TermsFor(Field: TSiftField; Action: TSiftAction): TStringArray;
+var
+  I, N: Integer;
+begin
+  Result := nil;
+  N := 0;
+  for I := 0 to High(FTerms) do
+    if (FTerms[I].Field = Field) and (FTerms[I].Action = Action) then
+    begin
+      SetLength(Result, N + 1);
+      Result[N] := FTerms[I].Value;
+      Inc(N);
+    end;
+end;
+
+function TSiftFilter.EffectiveChannels(const AllChannels: TStrings): TStringArray;
+var
+  InclCh, Exc: TStringArray;
+  L: TStringList;
+  I: Integer;
+  S: string;
+begin
+  L := TStringList.Create;
+  try
+    L.CaseSensitive := False;
+    L.Duplicates := dupIgnore;
+    InclCh := TermsFor(sfChannel, saInclude);
+    Exc := TermsFor(sfChannel, saExclude);
+    if Length(InclCh) > 0 then
+    begin
+      for S in InclCh do
+        if L.IndexOf(S) < 0 then
+          L.Add(S);
+    end
+    else
+      for I := 0 to FChannels.Count - 1 do
+        if FChannels[I] = '*' then
+        begin
+          if AllChannels <> nil then
+            for S in AllChannels do
+              if L.IndexOf(S) < 0 then
+                L.Add(S);
+        end
+        else if L.IndexOf(FChannels[I]) < 0 then
+          L.Add(FChannels[I]);
+    for S in Exc do
+    begin
+      I := L.IndexOf(S);
+      if I >= 0 then
+        L.Delete(I);
+    end;
+    SetLength(Result, L.Count);
+    for I := 0 to L.Count - 1 do
+      Result[I] := L[I];
+  finally
+    L.Free;
+  end;
+end;
+
+end.
