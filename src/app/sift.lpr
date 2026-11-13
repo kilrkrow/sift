@@ -4,7 +4,18 @@ program sift;
 
 {$mode objfpc}{$H+}
 
+{ ASLR (DYNAMIC_BASE), NX (NX_COMPAT), and on win64 high-entropy VA.
+  Combined with the -WR linker option on both Release modes so the PE
+  keeps a .reloc section (DYNAMIC_BASE needs relocations). Terminal
+  Server Aware is kept ($8000). }
+{$IFDEF WIN64}
+  {$SETPEOPTFLAGS $8160}
+{$ELSE}
+  {$SETPEOPTFLAGS $8140}
+{$ENDIF}
+
 uses
+  Sift.SafeInit,
   Interfaces, Forms, SysUtils, Classes, Sift.MainForm,
   {$IFDEF SIFT_HARNESS}
   { headless screenshot / self-test harness: only in the Harness-* build

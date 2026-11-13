@@ -67,8 +67,9 @@
         </Options>
       </Linking>
       <Other>
+        <CustomOptions Value="-WR"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -112,7 +113,7 @@
       <Other>
         <CustomOptions Value="-dSIFT_HARNESS"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -156,7 +157,7 @@
       <Other>
         <CustomOptions Value="-dSIFT_HARNESS"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot; -ResourcesOnly"/>
       </ExecuteAfter>
       </Other>
     </CompilerOptions>
@@ -256,8 +257,9 @@
       </Options>
     </Linking>
     <Other>
+      <CustomOptions Value="-WR"/>
       <ExecuteAfter>
-        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/Check-Imports.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
+        <Command Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjPath)../../tools/After-Link.ps1&quot; -Exe &quot;$(TargetFile)&quot;"/>
       </ExecuteAfter>
     </Other>
   </CompilerOptions>
