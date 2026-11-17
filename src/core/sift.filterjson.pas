@@ -19,8 +19,9 @@ function FilterToJson(F: TSiftFilter): string;
 procedure FilterFromJson(const S: string; F: TSiftFilter);
 procedure SaveFilterFile(F: TSiftFilter; const FileName: string);
 procedure LoadFilterFile(const FileName: string; F: TSiftFilter);
-{ Rejects control characters, a line equal to the PowerShell here-string
-  closer, both quote types, and remote / UNC file:// paths. }
+{ Rejects control characters and Unicode line separators, a line equal to a
+  PowerShell here-string marker, both quote types, Unicode quotation marks,
+  and remote / UNC file:// paths. }
 function ValidateChannel(const Channel: string; out Normalized: string;
   out ErrorMsg: string): Boolean;
 { Clears Dest, then adds every valid channel from a comma-separated list
@@ -108,7 +109,7 @@ begin
     ErrorMsg := 'channel is empty';
     Exit(False);
   end;
-  Why := UnsafeValueReason(V);
+  Why := UnsafeNameReason(V);
   if Why <> '' then
   begin
     ErrorMsg := Why;

@@ -2721,7 +2721,6 @@ end;
 procedure TSiftMainForm.ExportPsClick(Sender: TObject);
 var
   D: TSaveDialog;
-  L: TStringList;
 begin
   D := TSaveDialog.Create(Self);
   try
@@ -2732,13 +2731,9 @@ begin
     D.Options := D.Options + [ofOverwritePrompt];
     if D.Execute then
     begin
-      L := TStringList.Create;
-      try
-        L.Text := CompilePowerShell(FFilter, FAllChannels);
-        L.SaveToFile(D.FileName);
-      finally
-        L.Free;
-      end;
+      { UTF-8 with BOM: Windows PowerShell 5.1 reads a file without one as
+        the ANSI code page, PowerShell 7 as UTF-8 (issue #8). }
+      SavePowerShellExport(D.FileName, CompilePowerShell(FFilter, FAllChannels));
     end;
   finally
     D.Free;

@@ -135,6 +135,11 @@ function NormalizeTermValue(Field: TSiftField; const Value: string;
   out Normalized: string): Boolean;
 { Shared by JSON load, paste, --filter, ini reload and right-click Include. }
 function UnsafeValueReason(const Value: string): string;
+{ UnsafeValueReason plus: no Unicode quotation mark (U+2018-U+201F).
+  Provider, computer and channel values; message terms only need
+  UnsafeValueReason because the compiler emits non-ASCII text as Base64. }
+function UnsafeNameReason(const Value: string): string;
+function UnsafeTermValueReason(Field: TSiftField; const Value: string): string;
 function IsValidSidString(const Value: string): Boolean;
 function IsFileChannel(const Channel: string): Boolean;
 function IsRemoteChannel(const Channel: string): Boolean;
@@ -274,28 +279,60 @@ begin
       Exit(False);
 end;
 
+{ C0 controls, DEL, C1 controls (U+0080-U+009F, UTF-8 C2 80..9F, which
+  includes NEL U+0085), and the Unicode line and paragraph separators
+  U+2028 / U+2029 (E2 80 A8 / A9). }
 function HasControlChars(const S: string): Boolean;
 var
   I: Integer;
 begin
   for I := 1 to Length(S) do
+  begin
     if (Ord(S[I]) < 32) or (Ord(S[I]) = 127) then
+      Exit(True);
+    if (S[I] = #$C2) and (I < Length(S)) and (S[I + 1] in [#$80..#$9F]) then
+      Exit(True);
+    if (S[I] = #$E2) and (I + 2 <= Length(S)) and (S[I + 1] = #$80) and
+      (S[I + 2] in [#$A8, #$A9]) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
+const
+  { what PowerShell's tokenizer reads as a single / double quote }
+  PsSingleQuotes: array[0..4] of string = ('''', #$E2#$80#$98, #$E2#$80#$99,
+    #$E2#$80#$9A, #$E2#$80#$9B);
+  PsDoubleQuotes: array[0..3] of string = ('"', #$E2#$80#$9C, #$E2#$80#$9D,
+    #$E2#$80#$9E);
+
+function IsHereStringMarker(const Line: string): Boolean;
+var
+  Q: string;
+begin
+  for Q in PsSingleQuotes do
+    if (Line = Q + '@') or (Line = '@' + Q) then
+      Exit(True);
+  for Q in PsDoubleQuotes do
+    if (Line = Q + '@') or (Line = '@' + Q) then
       Exit(True);
   Result := False;
 end;
 
-function HasHereStringCloserLine(const S: string): Boolean;
+{ A line equal to a here-string closer ('@ "@) or opener (@' @"), with
+  ASCII or Unicode quotes. }
+function HasHereStringMarkerLine(const S: string): Boolean;
 var
   L: TStringList;
   I: Integer;
 begin
-  if S = '''@' then
+  if IsHereStringMarker(S) then
     Exit(True);
   L := TStringList.Create;
   try
     L.Text := S;
     for I := 0 to L.Count - 1 do
-      if L[I] = '''@' then
+      if IsHereStringMarker(L[I]) then
         Exit(True);
   finally
     L.Free;
@@ -303,20 +340,56 @@ begin
   Result := False;
 end;
 
+function ContainsAny(const S: string; const Items: array of string): Boolean;
+var
+  Q: string;
+begin
+  for Q in Items do
+    if Pos(Q, S) > 0 then
+      Exit(True);
+  Result := False;
+end;
+
 function HasBothQuoteTypes(const S: string): Boolean;
 begin
-  Result := (Pos('''', S) > 0) and (Pos('"', S) > 0);
+  Result := ContainsAny(S, PsSingleQuotes) and ContainsAny(S, PsDoubleQuotes);
+end;
+
+{ U+2018-U+201F: UTF-8 E2 80 98..9F }
+function HasUnicodeQuote(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(S) - 2 do
+    if (S[I] = #$E2) and (S[I + 1] = #$80) and (S[I + 2] in [#$98..#$9F]) then
+      Exit(True);
+  Result := False;
 end;
 
 function UnsafeValueReason(const Value: string): string;
 begin
   if HasControlChars(Value) then
     Exit('contains control characters');
-  if HasHereStringCloserLine(Value) then
-    Exit('contains a line equal to ''@');
+  if HasHereStringMarkerLine(Value) then
+    Exit('contains a line equal to a PowerShell here-string marker (''@ or similar)');
   if HasBothQuoteTypes(Value) then
     Exit('contains both single and double quotes');
   Result := '';
+end;
+
+function UnsafeNameReason(const Value: string): string;
+begin
+  Result := UnsafeValueReason(Value);
+  if (Result = '') and HasUnicodeQuote(Value) then
+    Result := 'contains a Unicode quotation mark (U+2018 to U+201F)';
+end;
+
+function UnsafeTermValueReason(Field: TSiftField; const Value: string): string;
+begin
+  if Field = sfMessage then
+    Result := UnsafeValueReason(Value)
+  else
+    Result := UnsafeNameReason(Value);
 end;
 
 function IsValidSidString(const Value: string): Boolean;
@@ -440,7 +513,7 @@ begin
   Result := V <> '';
   if not Result then
     Exit;
-  if UnsafeValueReason(V) <> '' then
+  if UnsafeTermValueReason(Field, V) <> '' then
   begin
     Result := False;
     Exit;
@@ -613,7 +686,7 @@ var
 begin
   if not NormalizeTermValue(T.Field, T.Value, N) then
   begin
-    Why := UnsafeValueReason(T.Value);
+    Why := UnsafeTermValueReason(T.Field, Trim(T.Value));
     if Why = '' then
     begin
       if T.Field = sfUser then
