@@ -410,6 +410,39 @@ begin
   end;
 end;
 
+function IsDecimalDigits(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := (S <> '') and (Length(S) <= 20);
+  for I := 1 to Length(S) do
+    if not (S[I] in ['0'..'9']) then
+      Exit(False);
+end;
+
+{ Event IDs / levels: validated to decimal at load, but a caller that skips
+  validation must still not splice text into the command. }
+function PsNumber(const S: string): string;
+begin
+  if IsDecimalDigits(S) then
+    Result := S
+  else
+    Result := PsValue(S);
+end;
+
+function PsNumberList(const V: TStringArray): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(V) do
+  begin
+    if I > 0 then
+      Result := Result + ',';
+    Result := Result + PsNumber(V[I]);
+  end;
+end;
+
 function LevelPsList(const V: TStringArray): string;
 var
   I: Integer;
@@ -419,7 +452,7 @@ begin
   begin
     if I > 0 then
       Result := Result + ',';
-    Result := Result + V[I];
+    Result := Result + PsNumber(V[I]);
     if V[I] = '4' then
       Result := Result + ',0';
   end;
@@ -528,7 +561,7 @@ begin
   V := F.TermsFor(sfProvider, saInclude);
   if Length(V) > 0 then Add('ProviderName=' + PsList(V, True));
   V := F.TermsFor(sfEventId, saInclude);
-  if Length(V) > 0 then Add('Id=' + PsList(V, False));
+  if Length(V) > 0 then Add('Id=' + PsNumberList(V));
   V := F.TermsFor(sfLevel, saInclude);
   if Length(V) > 0 then Add('Level=' + LevelPsList(V));
   V := F.TermsFor(sfKeywords, saInclude);

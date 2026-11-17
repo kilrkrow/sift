@@ -2,7 +2,8 @@
   Test stub for Get-WinEvent (issue #8 checks). Dot-source it; it defines a
   global Get-WinEvent that reads no log. It logs the FilterHashtable it got
   to $env:SIFT_STUB_LOG (key=base64,...;key=...) and returns two events:
-  RecordId/Id 101 whose Message contains the decoded $env:SIFT_STUB_MSG,
+  RecordId/Id 101 whose Message contains the value Base64-encoded in the
+  file $env:SIFT_STUB_MSGFILE,
   and 202 whose Message does not.
 #>
 function global:Get-WinEvent {
@@ -18,7 +19,7 @@ function global:Get-WinEvent {
     [System.IO.File]::AppendAllText($env:SIFT_STUB_LOG, ($parts -join ';') + "`r`n", $enc)
   }
   $m = ''
-  if ($env:SIFT_STUB_MSG) { $m = $enc.GetString([System.Convert]::FromBase64String($env:SIFT_STUB_MSG)) }
+  if ($env:SIFT_STUB_MSGFILE) { $m = $enc.GetString([System.Convert]::FromBase64String([System.IO.File]::ReadAllText($env:SIFT_STUB_MSGFILE).Trim())) }
   foreach ($e in @(@(101, ('prefix ' + $m + ' suffix')), @(202, 'unrelated text'))) {
     [pscustomobject]@{
       PSTypeName = 'Sift.StubEvent'; RecordId = $e[0]; Id = $e[0]; Message = $e[1]

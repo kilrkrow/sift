@@ -498,8 +498,8 @@ const
   DoubleNames: array[0..3] of string = ('0022', '201C', '201D', '201E');
   Dashes: array[0..3] of string = (H2D, H2013, H2014, H2015);
   DashNames: array[0..3] of string = ('002D', '2013', '2014', '2015');
-  AllSinks: array[0..6] of string = ('provider', 'logname', 'path', 'user',
-    'msginc', 'msgexc', 'perpath');
+  AllSinks: array[0..8] of string = ('provider', 'logname', 'path', 'user',
+    'msginc', 'msgexc', 'perpath', 'eventid', 'level');
   ShellNames: array[0..1] of string = ('powershell', 'pwsh');
   Seps: array[0..2] of string = (#13, #10, #13#10);
   SepNames: array[0..2] of string = ('cr', 'lf', 'crlf');
@@ -510,7 +510,8 @@ const
 
 { Breakouts, Q = the quote under test. Each one prints PWNED when its
   quote ends the literal in that sink:
-  BreakFH    hashtable value (ProviderName= / LogName= / Path= / UserID=)
+  BreakFH    hashtable value (ProviderName= / LogName= / Path= / UserID= /
+             Id= / Level=, the last two only reachable unvalidated)
   BreakText1 one-liner message Include (Where-Object after the pipe)
   BreakText2 export message Include (inside $x = @($x | Where-Object ...))
   BreakText3 export message Exclude (Where-Object with -not (...)) }
@@ -619,6 +620,7 @@ type
     procedure Variant8_ShellsAndDeliveryForms;
     procedure Regression_ApostropheValuesStillWork;
     procedure ExportFileIsUtf8WithBom;
+    procedure Critic_SameClassInputs;
   end;
 
 procedure TPsInjectionTests.SetUp;
@@ -716,6 +718,10 @@ begin
   end
   else if Sink = 'user' then
     Result := AddCh('System', False) and AddT(sfUser, saInclude, V)
+  else if Sink = 'eventid' then
+    Result := AddCh('System', False) and AddT(sfEventId, saInclude, V)
+  else if Sink = 'level' then
+    Result := AddCh('System', False) and AddT(sfLevel, saInclude, V)
   else if Sink = 'msginc' then
     Result := AddCh('System', False) and AddT(sfMessage, saInclude, V)
   else if Sink = 'msgexc' then
@@ -752,6 +758,10 @@ begin
     Name := Format('%.4d-%s-%s-raw', [FSeq, Id, Sink]);
   if Sink = 'user' then
     Plain := PlainSid
+  else if Sink = 'eventid' then
+    Plain := '7036'
+  else if Sink = 'level' then
+    Plain := '2'
   else
     Plain := PlainValue;
   Fv := TSiftFilter.Create;
@@ -1118,6 +1128,29 @@ begin
     Pos('SavePowerShellExport(D.FileName, CompilePowerShell(', Src) > 0);
 end;
 
+procedure TPsInjectionTests.Critic_SameClassInputs;
+var
+  Long: string;
+  I: Integer;
+begin
+  StartSet('critic');
+  { characters next to PowerShell's quote and dash tables, combining marks,
+    invalid and overlong UTF-8, a BOM character, NUL, and a very long value }
+  AddAllSinks('c-201F', 'x' + #$E2#$80#$9F + ' }; Write-Output PWNED; @{ a=' + #$E2#$80#$9F, False);
+  AddAllSinks('c-FF07', 'x' + #$EF#$BC#$87 + ' }; Write-Output PWNED; @{ a=' + #$EF#$BC#$87, False);
+  AddAllSinks('c-2032', 'x' + #$E2#$80#$B2 + ' }; Write-Output PWNED; @{ a=' + #$E2#$80#$B2, False);
+  AddAllSinks('c-combining', 'x' + Q2019 + #$CC#$81 + ' }; Write-Output PWNED; @{ a=' + #$CC#$81 + Q2019, False);
+  AddAllSinks('c-overlong27', 'x' + #$C0#$A7 + ' }; Write-Output PWNED; @{ a=' + #$E0#$80#$A7, False);
+  AddAllSinks('c-overlong2019', 'x' + #$F0#$82#$80#$99 + ' }; Write-Output PWNED; @{ a=' + #$F0#$82#$80#$99, False);
+  AddAllSinks('c-truncated', 'x' + #$E2#$80 + ' }; Write-Output PWNED; @{ a=' + #$E2, False);
+  AddAllSinks('c-feff', #$EF#$BB#$BF + 'x' + Q2018 + ' }; Write-Output PWNED; @{ a=' + Q2018, False);
+  AddAllSinks('c-nul', 'x' + #0 + Q2019 + ' }; Write-Output PWNED; @{ a=' + Q2019, False);
+  Long := '';
+  for I := 1 to 4000 do
+    Long := Long + 'ab' + Q2019 + Q27 + 'cd';
+  AddAllSinks('c-long', Long + BreakFH(Q2019), False);
+  RunChecker;
+end;
 initialization
   RegisterTest(TCompilerGoldenTests);
   RegisterTest(TPsInjectionTests);

@@ -125,6 +125,9 @@ function Get-Shape([string]$Text, [string]$Value, [ref]$UserCount, [ref]$Errors,
     if ($n -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
       if ($n.Value -ceq $Value) { $shape.Add('USERVALUE'); $uc++ }
       else { $shape.Add('SC:' + $n.StringConstantType + ':' + $n.Value) }
+    } elseif (($n -is [System.Management.Automation.Language.ConstantExpressionAst]) -and ("$($n.Value)" -ceq $Value)) {
+      # a number literal (Id= / Level=) equal to the plain value
+      $shape.Add('USERVALUE'); $uc++
     } elseif ($n -is [System.Management.Automation.Language.VariableExpressionAst]) {
       $shape.Add('VAR:' + $n.VariablePath.UserPath)
     } elseif ($n -is [System.Management.Automation.Language.TypeExpressionAst]) {
@@ -198,7 +201,7 @@ function Read-StubLog([string]$Path) {
 
 # Stub log line: key=b64,b64;key=b64 ... (FilterHashtable keys only)
 function Check-Received([string]$Id, [string]$Form, [string]$Sink, [string]$Value, [string]$LogPath) {
-  $keys = switch ($Sink) { 'provider' { @('ProviderName') } 'logname' { @('LogName') } 'path' { @('Path') } 'user' { @('UserID') } 'repro' { @('LogName', 'ProviderName') } default { @() } }
+  $keys = switch ($Sink) { 'provider' { @('ProviderName') } 'logname' { @('LogName') } 'path' { @('Path') } 'user' { @('UserID') } 'eventid' { @('Id') } 'level' { @('Level') } 'repro' { @('LogName', 'ProviderName') } default { @() } }
   foreach ($key in $keys) { Check-ReceivedKey $Id $Form $key $Value $LogPath }
 }
 
@@ -226,7 +229,9 @@ function Exec-InProcess([string]$Id, [string]$Kind, [string]$Sink, [string]$Valu
   $log = Join-Path $CaseDir ("stub-" + $PID + ".log")
   if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
   $env:SIFT_STUB_LOG = $log
-  $env:SIFT_STUB_MSG = [System.Convert]::ToBase64String($Utf8.GetBytes($Value))
+  $msgFile = Join-Path $CaseDir ('stub-msg-' + $PID + '.txt')
+  [System.IO.File]::WriteAllText($msgFile, [System.Convert]::ToBase64String($Utf8.GetBytes($Value)), $Utf8)
+  $env:SIFT_STUB_MSGFILE = $msgFile
   $o = ''
   try {
     if ($File) {
@@ -278,7 +283,9 @@ function Exec-Process([string]$Id, [string]$Form, [string]$Sink, [string]$Value,
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.EnvironmentVariables['SIFT_STUB_LOG'] = $log
-  $psi.EnvironmentVariables['SIFT_STUB_MSG'] = [System.Convert]::ToBase64String($Utf8.GetBytes($Value))
+  $msgFile = Join-Path $CaseDir ('stub-msg-p-' + $PID + '.txt')
+  [System.IO.File]::WriteAllText($msgFile, [System.Convert]::ToBase64String($Utf8.GetBytes($Value)), $Utf8)
+  $psi.EnvironmentVariables['SIFT_STUB_MSGFILE'] = $msgFile
   $p = [System.Diagnostics.Process]::Start($psi)
   $so = $p.StandardOutput.ReadToEndAsync()
   $se = $p.StandardError.ReadToEndAsync()
