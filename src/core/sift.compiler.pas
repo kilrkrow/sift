@@ -4,6 +4,10 @@ unit Sift.Compiler;
   - a structured XML query (<QueryList>), Include -> Select, Exclude -> Suppress
   - the equivalent Get-WinEvent -FilterHashtable one-liner when one exists
   - a PowerShell 5.1 export (Get-WinEvent -FilterXml); the query XML is a Base64 blob, not a here-string
+  User values in generated PowerShell are either one single-quoted literal
+  (printable ASCII only; every quote PowerShell reads as a single quote is
+  doubled) or a Base64 literal decoded at run time, so no value can change
+  the token structure of the command (issue #8).
   Event Log XPath is a subset of XPath 1.0: no contains()/starts-with(), and
   at most 20 sub-expressions per expression, so large OR groups are split
   across several Select elements (Selects in one Query are a union). }
@@ -40,6 +44,13 @@ function XmlEscape(const S: string): string;
 function XPathLiteral(const S: string): string;
 function SystemXPath(F: TSiftFilter): string;
 function PsQuote(const S: string): string;
+{ A user value as a PowerShell expression: PsQuote for printable ASCII,
+  otherwise ([System.Text.Encoding]::UTF8.GetString([System.Convert]::
+  FromBase64String('...'))). }
+function PsValue(const S: string): string;
+{ Writes an Export as PowerShell script: UTF-8 with BOM, so Windows
+  PowerShell 5.1 and PowerShell 7 read the same text. }
+procedure SavePowerShellExport(const FileName, Script: string);
 function KeywordDecimal(const Hex: string): string;
 
 { Builds the record-id lookup query for the detail pane. }
@@ -82,9 +93,82 @@ begin
     Result := '"' + S + '"';
 end;
 
+{ PowerShell's tokenizer ends a single-quoted literal at U+0027 and at
+  U+2018, U+2019, U+201A, U+201B. Like CodeGeneration.
+  EscapeSingleQuotedStringContent, double each of them. S is UTF-8; the
+  four Unicode quotes are matched as whole code points (E2 80 98..9B), the
+  only byte sequences a UTF-8 decoder turns into them, so an invalid or
+  overlong sequence cannot decode to a quote that was not doubled. }
 function PsQuote(const S: string): string;
+var
+  I, N: Integer;
 begin
-  Result := '''' + StringReplace(S, '''', '''''', [rfReplaceAll]) + '''';
+  Result := '''';
+  I := 1;
+  N := Length(S);
+  while I <= N do
+  begin
+    if S[I] = '''' then
+    begin
+      Result := Result + '''''';
+      Inc(I);
+    end
+    else if (S[I] = #$E2) and (I + 2 <= N) and (S[I + 1] = #$80) and
+      (S[I + 2] in [#$98..#$9B]) then
+    begin
+      Result := Result + Copy(S, I, 3) + Copy(S, I, 3);
+      Inc(I, 3);
+    end
+    else
+    begin
+      Result := Result + S[I];
+      Inc(I);
+    end;
+  end;
+  Result := Result + '''';
+end;
+
+function IsPrintableAscii(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(S) do
+    if (Ord(S[I]) < 32) or (Ord(S[I]) > 126) then
+      Exit(False);
+  Result := True;
+end;
+
+function PsValue(const S: string): string;
+var
+  B64: string;
+begin
+  if IsPrintableAscii(S) then
+    Exit(PsQuote(S));
+  B64 := EncodeStringBase64(S);
+  B64 := StringReplace(B64, #13, '', [rfReplaceAll]);
+  B64 := StringReplace(B64, #10, '', [rfReplaceAll]);
+  Result := '([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(''' +
+    B64 + ''')))';
+end;
+
+procedure SavePowerShellExport(const FileName, Script: string);
+const
+  Bom: array[0..2] of Byte = ($EF, $BB, $BF);
+var
+  Fs: TFileStream;
+  S: string;
+begin
+  S := Script;
+  if (S <> '') and (Copy(S, Length(S) - 1, 2) <> #13#10) then
+    S := S + #13#10;
+  Fs := TFileStream.Create(FileName, fmCreate);
+  try
+    Fs.WriteBuffer(Bom, SizeOf(Bom));
+    if S <> '' then
+      Fs.WriteBuffer(S[1], Length(S));
+  finally
+    Fs.Free;
+  end;
 end;
 
 function KeywordDecimal(const Hex: string): string;
@@ -320,7 +404,7 @@ begin
     if I > 0 then
       Result := Result + ',';
     if Quote then
-      Result := Result + PsQuote(V[I])
+      Result := Result + PsValue(V[I])
     else
       Result := Result + V[I];
   end;
@@ -345,7 +429,7 @@ function TextWhere(const Term: string; Include: Boolean): string;
 var
   Cond: string;
 begin
-  Cond := '$_.Message -ne $null -and $_.Message.IndexOf(' + PsQuote(Term) +
+  Cond := '$_.Message -ne $null -and $_.Message.IndexOf(' + PsValue(Term) +
     ', [StringComparison]::OrdinalIgnoreCase) -ge 0';
   if Include then
     Result := 'Where-Object { ' + Cond + ' }'
@@ -450,7 +534,7 @@ begin
   V := F.TermsFor(sfKeywords, saInclude);
   if Length(V) > 0 then Add('Keywords=' + KeywordDecimal(V[0]));
   V := F.TermsFor(sfUser, saInclude);
-  if Length(V) > 0 then Add('UserID=' + PsQuote(V[0]));
+  if Length(V) > 0 then Add('UserID=' + PsValue(V[0]));
   case F.TimeMode of
     tmRelative: Add('StartTime=' + RelativeStartPs(F.RelativeMs));
     tmAbsolute:

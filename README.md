@@ -21,8 +21,23 @@ system's logs or channel settings.
 
 ## Status
 
-Phase 1, version 0.1.1. Built and tested on Windows 11 only so far; see
+Phase 1, version 0.1.2. Built and tested on Windows 11 only so far; see
 [docs/compat.md](docs/compat.md) for which Windows versions it was actually run on.
+
+## Notes for 0.1.2
+
+Security fix (issue #8): PowerShell quoting of Unicode quote characters.
+Windows PowerShell and PowerShell 7 treat the typographic quotation marks
+(U+2018 to U+201E) as quotes, and 0.1.1 did not, so a filter value with one
+of them could end a string early in the "Copy one-liner" command and the
+"Export as PowerShell" script. Now every PowerShell quote character is
+escaped, filter values that are not plain ASCII reach PowerShell as Base64
+decoded at run time, and provider, computer and channel values with a
+Unicode quotation mark are rejected with a visible reason. Message terms
+may still contain one, and here-string markers, "both quote styles" and the
+Unicode line separators (U+0085, U+2028, U+2029) are checked with the
+Unicode forms too. Exported `.ps1` files are now written as UTF-8 with a
+BOM, so Windows PowerShell 5.1 and PowerShell 7 read the same text.
 
 ## Notes for 0.1.1
 
@@ -31,8 +46,9 @@ other free-text fields) are validated in one place; a value that contains
 both quote styles, a line equal to `'@`, or a control character is rejected
 with a visible reason, and a SID that is not `S-1-` plus at least one RID
 group is rejected the same way. PowerShell export writes the query XML as a
-Base64 blob, not a here-string, so a crafted value cannot break out of the
-script. Remote and UNC `file://` paths are rejected at the core: they are
+Base64 blob, not a here-string, which closes the here-string breakout from
+issue #1. It did not cover Unicode quotation marks in provider, channel or
+message values; see issue #8, fixed in 0.1.2. Remote and UNC `file://` paths are rejected at the core: they are
 never queried and never written to `sift.ini`. An elevation restart writes
 a random exclusive temp file and passes a SHA-256 of its bytes; the elevated
 process verifies the hash, loads the filter, and always deletes the file.

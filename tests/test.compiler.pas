@@ -618,6 +618,7 @@ type
     procedure Variant6_EverySink;
     procedure Variant8_ShellsAndDeliveryForms;
     procedure Regression_ApostropheValuesStillWork;
+    procedure ExportFileIsUtf8WithBom;
   end;
 
 procedure TPsInjectionTests.SetUp;
@@ -1076,6 +1077,45 @@ begin
   AddCase('reg-plain', 'provider', 'Service Control Manager', True, True);
   AddCase('reg-plain', 'logname', 'Microsoft-Windows-Kernel-Power/Thermal-Operational', True, True);
   RunChecker;
+end;
+
+procedure TPsInjectionTests.ExportFileIsUtf8WithBom;
+var
+  P, Script, Data, Src: string;
+  Fs: TFileStream;
+  F: TSiftFilter;
+begin
+  F := TSiftFilter.Create;
+  try
+    F.Channels.Add('System');
+    F.AddTerm(MakeTerm(sfMessage, saInclude, 'can' + Q2019 + 't'));
+    Script := CompilePowerShell(F, nil);
+  finally
+    F.Free;
+  end;
+  P := ScratchDir + 'bom-' + IntToStr(GetProcessID) + '.ps1';
+  SavePowerShellExport(P, Script);
+  Fs := TFileStream.Create(P, fmOpenRead);
+  try
+    SetLength(Data, Fs.Size);
+    if Fs.Size > 0 then
+      Fs.ReadBuffer(Data[1], Fs.Size);
+  finally
+    Fs.Free;
+  end;
+  DeleteFile(P);
+  AssertTrue('starts with EF BB BF', Copy(Data, 1, 3) = #$EF#$BB#$BF);
+  AssertEquals('then the script bytes and CRLF', Script + #13#10, Copy(Data, 4, MaxInt));
+  { Export as PowerShell in the viewer goes through the same function }
+  with TStringList.Create do
+  try
+    LoadFromFile(RepoDir + 'src\app\sift.mainform.pas');
+    Src := Text;
+  finally
+    Free;
+  end;
+  AssertTrue('mainform saves the export with SavePowerShellExport',
+    Pos('SavePowerShellExport(D.FileName, CompilePowerShell(', Src) > 0);
 end;
 
 initialization
